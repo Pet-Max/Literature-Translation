@@ -1,0 +1,128 @@
+# release.yml — 打 v* tag 自动构建并发布：质量门禁 → 双产物 → GitHub Release。
+# 结构：Job1 gate（发布前自检，tag push 不经过 check.yml）→ Job2 build（needs: gate）。
+# 门禁实现在 .github/actions/gate（与 check.yml 共用，改门禁只改那里）。
+# 版本一致性守卫：tag 必须等于 internal/version，否则失败。
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要构建并发布的 tag（如 v1.0.0）"
+        required: true
+        type: string
+
+permissions:
+  contents: read # 默认只读；build job 单独提权写 Release
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false # 发布不可互相打断：排队执行
+
+jobs:
+  # ── Job 1：质量门禁（与 check.yml 同套，实现在 composite action） ──────
+  gate:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: ./.github/actions/gate
+
+  # ── Job 2：构建双产物并发布 ────────────────────────────────────────────
+  build:
+    needs: gate
+    runs-on: windows-latest
+    permissions:
+      contents: write # 创建 Release 与上传产物
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      ARCH: amd64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 版本一致性守卫：tag 必须等于 internal/version（防「tag 新版、exe 旧版」）
+      - name: Version guard
+        shell: pwsh
+        run: |
+          $src = (Select-String -Path internal/version/version.go -Pattern '"(v.+)"').Matches[0].Groups[1].Value
+          if ("$env:TAG" -ne $src) { Write-Host "::error::tag($env:TAG) 与 internal/version($src) 不一致"; exit 1 }
+          Write-Host "version OK: $src"
+
+      - name: Build main exe
+        run: go build -tags desktop,production -ldflags "-H windowsgui" -o build/bin/Literature-Translation.exe .
+
+      # 嵌入式 Python 运行时（与本地 prepare_runtime.bat 同款）
+      - name: Prepare embedded python runtime
+        shell: pwsh
+        run: |
+          $rt = "build/runtime"
+          New-Item -ItemType Directory -Force $rt | Out-Null
+          Invoke-WebRequest "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip" -OutFile "$rt/py.zip"
+          Expand-Archive -Force "$rt/py.zip" $rt
+          Remove-Item "$rt/py.zip"
+          (Get-Content "$rt/python312._pth") -replace '#\s*import site','import site' | Set-Content "$rt/python312._pth"
+          Add-Content "$rt/python312._pth" "Lib/site-packages"
+          Invoke-WebRequest https://bootstrap.pypa.io/get-pip.py -OutFile "$rt/get-pip.py"
+          & "$rt\python.exe" "$rt/get-pip.py" --no-warn-script-location --quiet
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "$rt\python.exe" -m pip install --quiet --no-warn-script-location pymupdf httpx
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Remove-Item "$rt/get-pip.py"
+          & "$rt\python.exe" -c "import fitz, httpx; print('runtime OK')" 2>$null
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Stage payload
+        shell: pwsh
+        run: |
+          $stage = "build/package/Literature-Translation"
+          New-Item -ItemType Directory -Force "$stage/engine" | Out-Null
+          Copy-Item build/bin/Literature-Translation.exe $stage/
+          Copy-Item engine/*.py "$stage/engine/"
+          # robocopy 语义确定；Copy-Item 对「目标不存在 + 通配递归」有 leaf/container 坑
+          robocopy build/runtime "$stage/runtime" /E /NFL /NDL /NJH /NJS
+          if ($LASTEXITCODE -ge 8) { exit 1 }
+          # robocopy 成功码是 1..7：不清零会被 pwsh 当作步骤失败
+          $global:LASTEXITCODE = 0
+          Copy-Item LICENSE $stage/
+
+      - name: Portable zip
+        shell: pwsh
+        run: Compress-Archive -Force -Path build/package/Literature-Translation -DestinationPath "build/bin/Literature-Translation-${env:TAG}-windows-${env:ARCH}-portable.zip"
+
+      - name: Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
+          $ver = "$env:TAG" -replace '^v',''
+          & $iscc /DAppVersion=$ver build/installer/installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Create GitHub Release and upload
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "$env:TAG"
+          $notes = "Literature Translation $tag`n`n" +
+            "- **安装版** Literature-Translation-Setup-*-windows-amd64.exe：向导式安装，可自定义目录，含开始菜单与卸载器`n" +
+            "- **便携版** Literature-Translation-*-windows-amd64-portable.zip：解压即用，程序与归档自包含`n" +
+            "- 系统要求：Windows 10/11；翻译引擎已内置，详见 README 首次配置"
+          gh release create $tag --title $tag --notes $notes --verify-tag
+          gh release upload $tag "build/bin/Literature-Translation-$tag-windows-$env:ARCH-portable.zip" "build/bin/Literature-Translation-Setup-$tag-windows-$env:ARCH.exe" --clobber

@@ -1,0 +1,9 @@
+# ruff.toml — Python 引擎静态检查配置。规则集刻意从紧：只留错误级 pycodestyle、
+# pyflakes 与 bugbear（真 bug 模式）；SIM/FURB/ISC/RUF 等风格意见默认关闭，
+# 避免噪音淹没信号。engine.py 顶部 import 在 sys.path.insert 之后属有意为之，
+# 代码里已带 noqa: E402 备注供其他工具参考。
+line-length = 120
+target-version = "py310"
+
+[lint]
+select = ["E4", "E7", "E9", "F", "B"]

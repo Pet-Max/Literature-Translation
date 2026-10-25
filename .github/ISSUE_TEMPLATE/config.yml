@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 常见问题（README FAQ）
+    url: https://github.com/Pet-Max/Literature-Translation#常见问题
+    about: SmartScreen 提示、Edge/Python 依赖、MinerU Token、翻译失败排查等高频问题
+  - name: 💬 讨论区（Discussions）
+    url: https://github.com/Pet-Max/Literature-Translation/discussions
+    about: 使用心得、翻译效果交流、开放式讨论

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<title>Literature Translation</title>
+<link rel="stylesheet" href="./styles.css?v=059">
+<link rel="stylesheet" href="/assets/katex/katex.min.css">
+<link rel="stylesheet" href="/assets/lxgw/lxgwwenkai-regular.css">
+<link rel="stylesheet" href="/assets/lxgw/lxgwwenkai-bold.css">
+</head>
+<body>
+
+<div class="titlebar">
+  <div class="brand">
+    <svg class="brand-ico" viewBox="0 0 256 256" aria-hidden="true">
+      <g fill="var(--logo-mark)">
+        <rect x="62" y="46" width="132" height="42" rx="21"/>
+        <rect x="24" y="46" width="26" height="42" rx="13"/>
+        <rect x="206" y="46" width="26" height="42" rx="13"/>
+        <rect x="107" y="46" width="42" height="118" rx="21"/>
+        <rect x="107" y="176" width="42" height="34" rx="17"/>
+      </g>
+    </svg>
+    <span class="brand-name">Literature Translation</span>
+  </div>
+  <div class="win-controls">
+    <button id="btn-theme" class="theme-btn" aria-label="切换浅色/深色主题" title="切换浅色 / 深色">
+      <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5Z"/></svg>
+      <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>
+    </button>
+    <button id="win-min" aria-label="最小化"><span class="wc-min"></span></button>
+    <button id="win-max" aria-label="最大化"><span class="wc-max"></span></button>
+    <button id="win-close" class="close" aria-label="关闭"><span class="wc-close">✕</span></button>
+  </div>
+</div>
+
+<div class="app">
+  <nav class="sidebar">
+    <button class="nav-item active" data-view="tasks">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>任务
+      <span class="nav-badge" id="nav-task-count">0</span>
+    </button>
+    <button class="nav-item" data-view="settings">
+      <svg viewBox="0 0 24 24"><path d="M5 8h14M5 16h14"/><circle cx="10" cy="8" r="2.2"/><circle cx="15" cy="16" r="2.2"/></svg>设置
+    </button>
+    <button class="nav-item" data-view="logs">
+      <svg viewBox="0 0 24 24"><path d="M7 4v16M7 4h11l-2.5 4L18 12H7"/></svg>日志
+    </button>
+    <div class="sidebar-foot">
+      <a class="repo-link" id="repo-link" href="https://github.com/Pet-Max/Literature-Translation" title="GitHub 仓库 Pet-Max/Literature-Translation">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span>@Pet-Max</span>
+      </a>
+      <div id="sidebar-status">引擎启动中…</div>
+    </div>
+  </nav>
+
+  <main class="main">
+
+    <!-- ============ 视图：任务 ============ -->
+    <section class="view active" id="view-tasks">
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="拖入或选择文件">
+        <svg class="dz-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M8 29v8a4 4 0 0 0 4 4h24a4 4 0 0 0 4-4v-8"/>
+          <path d="M24 7v23"/>
+          <path d="M15 21l9-9 9 9"/>
+        </svg>
+        <div class="dz-hint">点击上传文件，或者将 <strong>PDF 或 MD 文档</strong>拖到这里</div>
+      </div>
+
+      <div class="section-head">
+        <h2>任务队列</h2><span class="count" id="queue-count">0 个任务</span>
+        <div class="mode-switch" id="mode-switch" title="入队模式：决定文件走哪条路">
+          <span class="mode-pill" id="mode-pill"></span>
+          <button class="mode-btn active" data-mode="auto" title="按语言自动路由">自动</button>
+          <button class="mode-btn" data-mode="translate" title="跳过解析，直接走翻译">翻译</button>
+          <button class="mode-btn" data-mode="export" title="导出为 PDF">导出</button>
+        </div>
+        <button class="btn primary" id="btn-queue-toggle" style="display:none">开始</button>
+        <button class="btn ghost-sm" id="btn-clear-finished">清掉已完成/失败</button>
+      </div>
+      <div id="queue-list"></div>
+      <div class="empty-hint" id="queue-empty">队列为空——拖入第一篇文献吧。</div>
+    </section>
+
+    <!-- ============ 视图：设置 ============ -->
+    <section class="view" id="view-settings">
+      <div class="view-title">设置</div>
+      <div class="view-desc">改动汇总在底部保存栏，保存后对新任务生效；凭据保存在本机。</div>
+
+      <div class="set-card">
+        <h3>服务连接</h3>
+        <div class="card-hint">MinerU 解析与翻译模型凭据 · <a class="mini-link" id="mineru-link" href="https://mineru.net/apiManage/token">前往 API 管理 ↗</a></div>
+        <div class="fgrid">
+          <label>API Token</label><div class="conn-wrap"><input class="in mono" type="password" id="cfg-mineru-token"><button class="conn-dot idle" data-conn="mineru" title="测试连接" aria-label="测试 MinerU 连接">⇄</button></div>
+          <label>解析模式</label><div><select class="in" id="cfg-mineru-mode" style="max-width:260px">
+            <option value="vlm">精准解析（VLM，公式表格更准）</option>
+            <option value="pipeline">快速解析（pipeline，文本层优先）</option>
+          </select></div>
+          <label>接口地址</label><div class="conn-wrap"><input class="in mono" id="cfg-llm-url"><button class="conn-dot idle" data-conn="llm" title="测试连接" aria-label="测试 LLM 连接">⇄</button></div>
+          <label>API Key</label><input class="in mono" type="password" id="cfg-llm-key">
+          <label>模型名</label><div class="inline-btns" style="position:relative">
+            <input class="in mono" id="cfg-llm-model" style="max-width:230px" placeholder="glm-4.6">
+            <button class="btn" id="btn-fetch-models" title="从上游接口拉取可用模型列表">拉取模型</button>
+            <div class="model-pop" id="model-pop" hidden></div>
+          </div>
+          <label>并发段数</label><div><select class="in" id="cfg-llm-conc" style="max-width:150px">
+            <option value="1">1（最稳）</option><option value="3">3（推荐）</option>
+            <option value="5">5（最快）</option><option value="8">8</option>
+          </select></div>
+        </div>
+      </div>
+
+      <div class="set-card">
+        <h3>翻译规则</h3>
+        <div class="card-hint">多套预设 · 「生效中」对下一个任务起作用</div>
+        <div class="rule-list" id="rule-list"></div>
+        <button class="btn ghost-sm" id="btn-rule-add" style="margin-top:10px">＋ 新建预设</button>
+      </div>
+
+      <div class="set-card">
+        <h3>术语表</h3>
+        <div class="card-hint">附在每段的翻译指令中</div>
+        <div class="glossary" id="glossary-box"></div>
+        <button class="btn ghost-sm g-add" id="g-add" style="margin-top:10px">＋ 添加术语</button>
+      </div>
+
+      <div class="set-card">
+        <h3>排版选项</h3>
+        <div class="card-hint">中文 PDF 的版面</div>
+        <div class="toggle-row">
+          <span class="switch"><input type="checkbox" id="cfg-bilingual"><i></i></span>
+          <span class="t-name">双语对照</span><span class="t-desc">译文段落后附原文段落</span>
+        </div>
+        <div class="toggle-row">
+          <span class="switch"><input type="checkbox" id="cfg-toc"><i></i></span>
+          <span class="t-name">生成目录</span><span class="t-desc">按解析出的标题层级</span>
+        </div>
+        <div class="toggle-row">
+          <span class="switch"><input type="checkbox" id="cfg-twocolumn"><i></i></span>
+          <span class="t-name">双栏排版</span><span class="t-desc">接近期刊观感，公式多时建议关闭</span>
+        </div>
+        <div class="toggle-row">
+          <span class="switch"><input type="checkbox" id="cfg-skiprefs"><i></i></span>
+          <span class="t-name">参考文献保留原文</span><span class="t-desc">学界惯例，检索入口不翻译</span>
+        </div>
+        <div class="toggle-row">
+          <span class="switch"><input type="checkbox" id="cfg-repair"><i></i></span>
+          <span class="t-name">拼写校准</span><span class="t-desc">用原 PDF 词表修复解析损伤（推荐开）</span>
+        </div>
+      </div>
+
+      <div class="set-card">
+        <h3>输出</h3>
+        <div class="card-hint">成品 PDF 的字体与归档位置</div>
+        <div class="fgrid">
+          <label>正文字体</label><div class="inline-btns">
+            <select class="in" id="cfg-font" style="max-width:240px"></select>
+            <button class="btn" id="font-import">导入字体</button>
+          </div>
+          <label>归档目录</label><input class="in mono" id="cfg-outdir" placeholder="默认 程序目录\Literature Library">
+        </div>
+        <div class="preview-block" id="font-preview">
+          <div class="pv-line">预览：中英文混排 A different language is a different vision of life，公式 <span class="tex" data-tex="f(x)=\sum_{i=1}^{n} w_i x_i+b">f(x)=\sum_{i=1}^{n} w_i x_i+b</span> 与 <span class="tex" data-tex="\frac{\partial u}{\partial t}">\frac{\partial u}{\partial t}</span></div>
+          <div class="pv-line b">粗体：中文粗体检验 · <span class="tex" data-tex="A\boldsymbol{x}=\boldsymbol{b},\ \omega=2\pi f">A\boldsymbol{x}=\boldsymbol{b},\ \omega=2\pi f</span></div>
+        </div>
+      </div>
+
+      <div class="save-bar">
+        <span class="dirty-pill" id="dirty-pill">● 有未保存的修改</span>
+        <span class="save-note">改动保存后对新任务生效</span>
+        <span class="save-hint" id="save-hint"></span>
+        <button class="btn primary" id="btn-save-config">保存设置</button>
+      </div>
+    </section>
+
+    <!-- ============ 视图：日志 ============ -->
+    <section class="view" id="view-logs">
+      <div class="view-title">日志</div>
+      <div class="view-desc">解析、翻译重试与导出的全过程。出问题先看这里。</div>
+      <div class="log-filters">
+        <button class="log-filter on" data-lv="all">全部</button>
+        <button class="log-filter" data-lv="info">信息</button>
+        <button class="log-filter" data-lv="warn">警告</button>
+        <button class="log-filter" data-lv="error">错误</button>
+        <button class="btn ghost-sm" id="btn-clear-log" style="margin-left:auto">清空</button>
+      </div>
+      <div class="log-panel" id="log-panel"></div>
+    </section>
+
+  </main>
+</div>
+
+<div class="modal-scrim" id="modal-scrim" hidden>
+  <div class="modal" id="modal-box" role="dialog" aria-modal="true">
+    <div class="m-ico" id="modal-ico">!</div>
+    <h3 id="modal-title"></h3>
+    <p id="modal-body"></p>
+    <div class="m-btns" id="modal-btns"></div>
+  </div>
+</div>
+<script defer src="/assets/katex/katex.min.js"></script>
+<script src="/main.js?v=059"></script>
+</body>
+</html>

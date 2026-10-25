@@ -1,0 +1,19 @@
+# check.yml — 质量门禁：push main / PR / 手动触发。
+# 五步门禁实现在 .github/actions/gate（与 release.yml 共用，改门禁只改那里）。
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/gate

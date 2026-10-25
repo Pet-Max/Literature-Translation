@@ -1,0 +1,43 @@
+name: ❓ 使用咨询
+description: 安装配置、凭据设置、翻译效果等方面的疑问
+title: "[Q&A]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        有疑问欢迎提出！先看看下面的确认项，很多问题 README 里已经有答案。
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已查看 README 的「常见问题」与「快速开始」章节
+          required: true
+        - label: 我已搜索[开放中的 issue](https://github.com/Pet-Max/Literature-Translation/issues)确认没有相同疑问
+          required: true
+        - label: 我确认这是咨询求助，不是 Bug 反馈或功能建议
+          required: true
+
+  - type: dropdown
+    id: topic
+    attributes:
+      label: 咨询主题
+      options:
+        - 安装与运行环境
+        - 凭据配置（MinerU / LLM）
+        - 翻译效果（规则 / 术语 / 模型选择）
+        - 排版与导出
+        - 归档结构
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: detail
+    attributes:
+      label: 问题详述
+      description: 完整描述你的疑问与已尝试过的办法
+    validations:
+      required: true

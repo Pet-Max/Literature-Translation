@@ -1,0 +1,12 @@
+# 统一换行处理：仓库内文本按 LF 存、检出按平台默认；批处理必须 CRLF
+* text=auto
+*.bat text eol=crlf
+# fuzz 种子语料是逐字节比对的数据，禁止换行规范化
+internal/pipeline/testdata/** -text
+*.png binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pdf binary

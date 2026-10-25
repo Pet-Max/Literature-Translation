@@ -1,0 +1,294 @@
+package app
+
+import (
+	"fmt"
+	"regexp"
+	"sync"
+	"time"
+)
+
+// TaskStatus 任务状态机：等待 → 解析中 → 翻译中 → 排版中 → 完成/失败。
+type TaskStatus string
+
+const (
+	StatusPending     TaskStatus = "等待"
+	StatusParsing     TaskStatus = "解析中"
+	StatusTranslating TaskStatus = "翻译中"
+	StatusRendering   TaskStatus = "排版中"
+	StatusDone        TaskStatus = "完成"
+	StatusFailed      TaskStatus = "失败"
+)
+
+// Task 队列中的一个翻译任务。
+type Task struct {
+	ID         string     `json:"id"`
+	Code       string     `json:"code"`
+	Kind       string     `json:"kind"` // pdf | md | export（仅排版）
+	Mode       string     `json:"mode"` // 入队时的模式档位：auto | translate | export
+	SourcePath string     `json:"source_path"`
+	Status     TaskStatus `json:"status"`
+	Stage      string     `json:"stage"`
+	Done       int        `json:"done"`
+	Total      int        `json:"total"`
+	Failed     int        `json:"failed"`
+	RefsKept   int        `json:"refs_kept"`
+	OutPDF     string     `json:"out_pdf"`
+	ZHMD       string     `json:"zh_md"`
+	WorkDir    string     `json:"work_dir"`
+	Err        string     `json:"err"`
+	AddedAt    time.Time  `json:"added_at"`
+}
+
+var codeRe = regexp.MustCompile(`^[A-Za-z]+\d+`)
+
+// TaskQueue 串行任务队列：一次处理一篇，处理函数由 App 注入。
+// 手动开始模式：入队只排队不执行。Start 后按序跑完（跑完即回到待开始）；
+// StartOne 只跑指定的一篇；Pause 后当前这篇跑完即停，等待中的任务不动。
+type TaskQueue struct {
+	mu      sync.Mutex
+	tasks   []*Task
+	current *Task
+	runner  func(*Task) error
+	notify  chan struct{}
+	paused  bool
+	soloID  string // 非空 = 单跑模式：只跑这一个任务，跑完即回到待开始
+	onIdle  func() // 每篇跑完后的回调（App 用于推送队列状态变化）
+}
+
+// NewTaskQueue 创建队列（调用 Worker 启动处理循环）。初始为待开始态。
+func NewTaskQueue(runner func(*Task) error) *TaskQueue {
+	return &TaskQueue{runner: runner, notify: make(chan struct{}, 8), paused: true}
+}
+
+// Start 开始/继续处理队列中的等待任务（一次性触发，跑到队列为空）。
+func (q *TaskQueue) Start() {
+	q.mu.Lock()
+	q.paused = false
+	q.soloID = ""
+	q.mu.Unlock()
+	q.wake()
+}
+
+// StartOne 只开始指定的一篇：提到队首，跑完即回到待开始，其余等待任务不动。
+func (q *TaskQueue) StartOne(id string) error {
+	q.mu.Lock()
+	idx := -1
+	for i, t := range q.tasks {
+		if t.ID == id {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 || q.tasks[idx].Status != StatusPending {
+		q.mu.Unlock()
+		return fmt.Errorf("任务不在等待状态")
+	}
+	t := q.tasks[idx]
+	q.tasks = append(q.tasks[:idx], q.tasks[idx+1:]...)
+	q.tasks = append([]*Task{t}, q.tasks...)
+	q.paused = false
+	q.soloID = id
+	q.mu.Unlock()
+	q.wake()
+	return nil
+}
+
+// Pause 暂停：正在跑的这篇自然跑完，之后不再取新任务。
+func (q *TaskQueue) Pause() {
+	q.mu.Lock()
+	q.paused = true
+	q.mu.Unlock()
+}
+
+// IsPaused 队列是否处于暂停/待开始状态。
+func (q *TaskQueue) IsPaused() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.paused
+}
+
+// PendingCount 等待中的任务数。
+func (q *TaskQueue) PendingCount() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	n := 0
+	for _, t := range q.tasks {
+		if t.Status == StatusPending {
+			n++
+		}
+	}
+	return n
+}
+
+// Add 入队一个任务（同源路径去重）。mode 记录入队时的模式档位。
+func (q *TaskQueue) Add(kind, path, mode string) (*Task, error) {
+	q.mu.Lock()
+	for _, t := range q.tasks {
+		if t.SourcePath == path && (t.Status == StatusPending || t == q.current) {
+			q.mu.Unlock()
+			return t, nil
+		}
+	}
+	code := codeRe.FindString(baseName(path))
+	if code == "" {
+		code = fmt.Sprintf("%d", time.Now().UnixNano()%100000)
+	}
+	t := &Task{
+		ID:         fmt.Sprintf("T%d", time.Now().UnixNano()),
+		Code:       code,
+		Kind:       kind,
+		Mode:       mode,
+		SourcePath: path,
+		Status:     StatusPending,
+		Stage:      "待开始",
+		AddedAt:    time.Now(),
+	}
+	q.tasks = append(q.tasks, t)
+	q.mu.Unlock()
+	q.wake()
+	return t, nil
+}
+
+// List 全部任务快照。
+func (q *TaskQueue) List() []*Task {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]*Task, len(q.tasks))
+	copy(out, q.tasks)
+	return out
+}
+
+// Current 正在处理的任务（无则 nil）。
+func (q *TaskQueue) Current() *Task {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.current
+}
+
+// ClearFinished 清掉已完成/失败的任务卡片。
+func (q *TaskQueue) ClearFinished() []*Task {
+	q.mu.Lock()
+	kept := q.tasks[:0]
+	for _, t := range q.tasks {
+		if t.Status != StatusDone && t.Status != StatusFailed {
+			kept = append(kept, t)
+		}
+	}
+	q.tasks = kept
+	q.mu.Unlock()
+	q.wake()
+	return q.List()
+}
+
+// Remove 从队列移除一个等待中的任务（进行中的不可取消）。
+func (q *TaskQueue) Remove(id string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for i, t := range q.tasks {
+		if t.ID == id {
+			if t.Status != StatusPending {
+				return fmt.Errorf("任务正在处理，暂不支持取消")
+			}
+			q.tasks = append(q.tasks[:i], q.tasks[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("任务 %s 不存在", id)
+}
+
+// Retry 把一个失败/完成任务重置为等待并重新处理。
+func (q *TaskQueue) Retry(id string) (*Task, error) {
+	q.mu.Lock()
+	var t *Task
+	for _, cand := range q.tasks {
+		if cand.ID == id {
+			t = cand
+			break
+		}
+	}
+	if t == nil {
+		q.mu.Unlock()
+		return nil, fmt.Errorf("任务 %s 不存在", id)
+	}
+	t.Status = StatusPending
+	t.Stage = "重新排队"
+	t.Err = ""
+	t.Done, t.Total, t.Failed = 0, 0, 0
+	q.mu.Unlock()
+	q.wake()
+	return t, nil
+}
+
+func baseName(path string) string {
+	i := len(path) - 1
+	for i >= 0 && path[i] != '/' && path[i] != '\\' {
+		i--
+	}
+	return path[i+1:]
+}
+
+func (q *TaskQueue) wake() {
+	select {
+	case q.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (q *TaskQueue) nextPending() *Task {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, t := range q.tasks {
+		if t.Status != StatusPending {
+			continue
+		}
+		if q.soloID != "" && t.ID != q.soloID {
+			continue // 单跑模式：其余任务跳过
+		}
+		return t
+	}
+	return nil
+}
+
+// Worker 串行处理循环（ctx 取消时退出）。仅在未暂停时取任务；
+// 每篇跑完后回调 onIdle（供 App 推送队列状态，刷新开始/暂停按钮）。
+func (q *TaskQueue) Worker(ctx interface{ Done() <-chan struct{} }) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-q.notify:
+			for {
+				if q.IsPaused() {
+					break
+				}
+				t := q.nextPending()
+				if t == nil {
+					break
+				}
+				q.mu.Lock()
+				q.current = t
+				q.mu.Unlock()
+				if err := q.runner(t); err != nil {
+					q.mu.Lock()
+					t.Status = StatusFailed
+					t.Err = err.Error()
+					q.mu.Unlock()
+				}
+				q.mu.Lock()
+				q.current = nil
+				if q.soloID != "" && q.soloID == t.ID { // 单跑模式：跑完这一篇即回到待开始
+					q.soloID = ""
+					q.paused = true
+				}
+				q.mu.Unlock()
+				if q.onIdle != nil {
+					q.onIdle()
+				}
+			}
+			// 队列清空或被暂停：回到待开始态，新入队的任务等下一次「开始」
+			q.mu.Lock()
+			q.paused = true
+			q.mu.Unlock()
+		}
+	}
+}

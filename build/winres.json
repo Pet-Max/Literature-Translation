@@ -1,0 +1,10 @@
+{
+  "RT_GROUP_ICON": {
+    "1": {
+      "0000": ["windows/icon.ico"]
+    },
+    "3": {
+      "0000": ["windows/icon.ico"]
+    }
+  }
+}

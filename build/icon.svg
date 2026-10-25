@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="100%" height="100%">
+  <!-- Literature Translation 图标：灰色断笔 T（横杠两端/竖笔底端断口） -->
+  <g fill="#A9AEB8">
+    <rect x="62"  y="46"  width="132" height="42"  rx="21"/>
+    <rect x="24"  y="46"  width="26"  height="42"  rx="13"/>
+    <rect x="206" y="46"  width="26"  height="42"  rx="13"/>
+    <rect x="107" y="46"  width="42"  height="118" rx="21"/>
+    <rect x="107" y="176" width="42"  height="34"  rx="17"/>
+  </g>
+</svg>

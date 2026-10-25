@@ -1,0 +1,38 @@
+# ============ 构建产物（build.bat / go build 本地产出，不入库） ============
+build/bin/
+build/package/
+build/runtime/
+*.exe
+
+# ============ 依赖与本地环境 ============
+.ruff_cache/
+node_modules/
+venv/
+.venv/
+.env
+
+# ============ Python 缓存 ============
+__pycache__/
+*.py[cod]
+
+# ============ 测试与剖析的本地产物 ============
+.playwright-cli/
+.pytest_cache/
+*.test
+*.out
+*.prof
+*.log
+
+# ============ Go 工作区（机器本地，不入库） ============
+go.work
+go.work.sum
+
+# ============ 工具会话数据（AI 助手工作区，属个人数据） ============
+.zcode/
+
+# ============ 操作系统与编辑器杂物 ============
+Thumbs.db
+Desktop.ini
+.DS_Store
+.idea/
+.vscode/
