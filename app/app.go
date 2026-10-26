@@ -389,8 +389,14 @@ func (a *App) PickFiles() ([]string, error) {
 
 // ---------------------------------------------------------------- 字体
 
-// FontList 已导入字体列表。
-func (a *App) FontList() []config.UserFont { return a.cfg.UserFonts }
+// FontList 已导入字体列表。绑定层不变式：永不返回 nil——nil 会被序列化
+// 成 null，前端对返回值直接 .map 会崩。
+func (a *App) FontList() []config.UserFont {
+	if a.cfg.UserFonts == nil {
+		return []config.UserFont{}
+	}
+	return a.cfg.UserFonts
+}
 
 // FontAdd 导入字体文件（三连检）。
 func (a *App) FontAdd(path string) (config.UserFont, error) {

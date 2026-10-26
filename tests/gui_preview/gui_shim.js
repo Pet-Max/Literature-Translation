@@ -4,6 +4,8 @@ const _bs = String.fromCharCode(92);
 
 // ?empty：空队列演示态（README 预览图用）
 const EMPTY = new URLSearchParams(location.search).has("empty");
+// ?fontnull：FontList 返回 null（Go nil 切片的 JSON 形态），回归 v1.0.1 修复
+const FONTNULL = new URLSearchParams(location.search).has("fontnull");
 
 const MOCK_TASKS = [
   {
@@ -94,7 +96,7 @@ window.go = { app: { App: {
   TestLLM: async () => 15,
   TestMinerU: async () => "Token 有效",
   GetConfig: async () => MOCK_CFG,
-  Version: async () => "v1.0.0",
+  Version: async () => "v1.0.1",
   SaveConfig: async () => true,
   IronRules: async () => MOCK_IRON,
   PickFiles: async () => [],
@@ -104,7 +106,7 @@ window.go = { app: { App: {
   QueuePause: async () => true,
   QueueStartOne: async (id) => true,
   SaveRules: async (active, presets) => { MOCK_CFG.rules = { active, presets, user_global: "" }; return true; },
-  FontList: async () => [],
+  FontList: async () => (FONTNULL ? null : []),
   FontAdd: async () => ({}),
   SetFontPreset: async (preset, uf) => { MOCK_CFG.export.font_preset = preset; MOCK_CFG.export.user_font = uf; return true; },
   PickFontFile: async () => "",

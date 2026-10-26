@@ -621,7 +621,8 @@ async function startRuleRename(i) {
 }
 
 async function loadFontSection() {
-  const list = await App.FontList();
+  // || []：绑定层万一返回 null（Go nil 切片序列化形态）时不崩，空列表处理
+  const list = (await App.FontList()) || [];
   const sel = $("cfg-font");
   sel.innerHTML = Object.entries(FONT_PRESETS)
     .map(([k, p]) => `<option value="${k}">${p.label}</option>`).join("") +
@@ -956,56 +957,64 @@ function bindTheme() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
-  bindTheme();
-  bindFetchModels();
-  bindConnTests();
-  bindTitlebar();
-  bindNav();
-  bindDrop();
-  bindModeSwitch();
-  bindQueueButtons();
-  bindSave();
-  bindLog();
-  bindRulesStatic();
-  // 侧栏底部 GitHub 入口：走系统默认浏览器（WebView 内不能开外链）
-  $("repo-link").addEventListener("click", (e) => {
-    e.preventDefault();
-    rt.BrowserOpenURL(e.currentTarget.getAttribute("href"));
-  });
-  // MinerU API 管理直达
-  $("mineru-link").addEventListener("click", (e) => {
-    e.preventDefault();
-    rt.BrowserOpenURL(e.currentTarget.getAttribute("href"));
-  });
-  // 队列开始/暂停开关
-  $("btn-queue-toggle").addEventListener("click", async () => {
-    try {
-      if (QUEUE_STATE.running) await App.QueuePause();
-      else await App.QueueStart();
-      renderQueue();
-    } catch (e) {
-      localLog("error", "队列操作失败：" + e);
-    }
-  });
-  rt.EventsOn("task:update", (t) => upsertTask(t));
-  rt.EventsOn("queue:change", () => renderQueue());
-  rt.EventsOn("log:line", (line) => appendLog(line));
-  await loadSettings();
-  // 脏监听延迟绑定：跳过 WebView 自动填充密码框时触发的 input 事件
-  setTimeout(() => {
-    $("view-settings").addEventListener("input", markSettingsDirty);
-    $("view-settings").addEventListener("change", markSettingsDirty);
-  }, 800);
-  renderQueue();
-  const tail = await App.GetLogTail();
-  logLines = tail.slice();
-  renderLog();
-  positionModePill();
-  // 版本号单一来源：Go 侧 internal/version 经绑定给出；壳缺失时退化为 ?
-  let VER = "?";
-  try { VER = await App.Version(); } catch (e) { /* 无绑定时显示 ? */ }
-  const fontsOk = CFG.mineru?.token && CFG.llm?.api_key;
-  $("sidebar-status").innerHTML = fontsOk
-    ? `${VER} <span class="dot">●</span> 就绪`
-    : `${VER} <span style="color:var(--bad)">●</span> 待配置`;
+  try {
+    bindTheme();
+    bindFetchModels();
+    bindConnTests();
+    bindTitlebar();
+    bindNav();
+    bindDrop();
+    bindModeSwitch();
+    bindQueueButtons();
+    bindSave();
+    bindLog();
+    bindRulesStatic();
+    // 侧栏底部 GitHub 入口：走系统默认浏览器（WebView 内不能开外链）
+    $("repo-link").addEventListener("click", (e) => {
+      e.preventDefault();
+      rt.BrowserOpenURL(e.currentTarget.getAttribute("href"));
+    });
+    // MinerU API 管理直达
+    $("mineru-link").addEventListener("click", (e) => {
+      e.preventDefault();
+      rt.BrowserOpenURL(e.currentTarget.getAttribute("href"));
+    });
+    // 队列开始/暂停开关
+    $("btn-queue-toggle").addEventListener("click", async () => {
+      try {
+        if (QUEUE_STATE.running) await App.QueuePause();
+        else await App.QueueStart();
+        renderQueue();
+      } catch (e) {
+        localLog("error", "队列操作失败：" + e);
+      }
+    });
+    rt.EventsOn("task:update", (t) => upsertTask(t));
+    rt.EventsOn("queue:change", () => renderQueue());
+    rt.EventsOn("log:line", (line) => appendLog(line));
+    await loadSettings();
+    // 脏监听延迟绑定：跳过 WebView 自动填充密码框时触发的 input 事件
+    setTimeout(() => {
+      $("view-settings").addEventListener("input", markSettingsDirty);
+      $("view-settings").addEventListener("change", markSettingsDirty);
+    }, 800);
+    renderQueue();
+    const tail = await App.GetLogTail();
+    logLines = tail.slice();
+    renderLog();
+    positionModePill();
+    // 版本号单一来源：Go 侧 internal/version 经绑定给出；壳缺失时退化为 ?
+    let VER = "?";
+    try { VER = await App.Version(); } catch (e) { /* 无绑定时显示 ? */ }
+    const fontsOk = CFG.mineru?.token && CFG.llm?.api_key;
+    $("sidebar-status").innerHTML = fontsOk
+      ? `${VER} <span class="dot">●</span> 就绪`
+      : `${VER} <span style="color:var(--bad)">●</span> 待配置`;
+  } catch (e) {
+    // 初始化链断裂时状态栏会永远停在 index.html 的占位文案「引擎启动中…」，
+    // 这里把真实错误亮出来，避免启动故障伪装成正常状态
+    console.error("初始化失败", e);
+    $("sidebar-status").innerHTML =
+      `<span style="color:var(--bad)">●</span> 启动异常：` + esc(String(e)).slice(0, 120);
+  }
 });

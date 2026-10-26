@@ -165,7 +165,8 @@ func Default() *Config {
 		Glossary: []Term{{En: "Langevin equation", Zh: "朗之万方程"}},
 		Rules:    Rules{Active: "默认", Presets: []RulePreset{{Name: "默认", Text: DefaultRules}}},
 		Export: Export{
-			Bilingual:  true,
+			// 出厂默认关闭：纯译文为主，需要对照的用户在设置里自行打开
+			Bilingual:  false,
 			TOC:        false,
 			TwoColumn:  false,
 			FontPreset: "lxgw",
@@ -174,6 +175,8 @@ func Default() *Config {
 		},
 		Repair:    Repair{Spelling: true},
 		Translate: Translate{SkipReferences: true},
+		// 空切片而非 nil：nil 经 JSON 序列化成 null，前端拿到会崩
+		UserFonts: []UserFont{},
 	}
 }
 
@@ -361,6 +364,11 @@ func (c *Config) Normalize() {
 	}
 	if c.Export.UserFont != "" {
 		c.Export.FontPreset = "custom"
+	}
+	// 旧版落盘的 "user_fonts": null 载入后是 nil，归一化为空切片：
+	// null 发到前端会让 FontList 的 list.map 崩溃，整条初始化链中断
+	if c.UserFonts == nil {
+		c.UserFonts = []UserFont{}
 	}
 }
 
