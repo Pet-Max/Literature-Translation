@@ -96,7 +96,8 @@ window.go = { app: { App: {
   TestLLM: async () => 15,
   TestMinerU: async () => "Token 有效",
   GetConfig: async () => MOCK_CFG,
-  Version: async () => "v1.0.1",
+  Version: async () => "v1.0.2",
+  CheckUpdate: async () => ({ has_update: false, current: "v1.0.2", latest: "v1.0.2", url: "", notes: "" }),
   SaveConfig: async () => true,
   IronRules: async () => MOCK_IRON,
   PickFiles: async () => [],
@@ -115,6 +116,8 @@ window.go = { app: { App: {
   OpenPath: async () => true,
 }}};
 
+const rtState = { maximised: false };
+
 window.runtime = {
   EventsOn: (name, cb) => {
     (window.__evt = window.__evt || {})[name] = cb;
@@ -125,4 +128,8 @@ window.runtime = {
   },
   OnFileDrop: () => {},
   BrowserOpenURL: () => {},
+  WindowMinimise: () => {},
+  WindowToggleMaximise: () => { rtState.maximised = !rtState.maximised; },
+  WindowIsMaximised: async () => rtState.maximised,
+  Quit: () => {},
 };

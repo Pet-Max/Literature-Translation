@@ -1,10 +1,10 @@
 ; Literature Translation 安装器（Inno Setup 6）。
-; 由 package.bat 调用并传入 /DAppVersion=1.0.1；载荷取自 build\package\。
+; 由 package.bat 调用并传入 /DAppVersion=1.0.2；载荷取自 build\package\。
 ; 安装到用户可写目录（不弹 UAC），归档默认跟随 exe——程序与文献库自包含。
 
 #define AppName "Literature Translation"
 #ifndef AppVersion
-#define AppVersion "1.0.1"
+#define AppVersion "1.0.2"
 #endif
 
 [Setup]

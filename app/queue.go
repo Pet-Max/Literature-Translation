@@ -186,9 +186,10 @@ func (q *TaskQueue) Remove(id string) error {
 	defer q.mu.Unlock()
 	for i, t := range q.tasks {
 		if t.ID == id {
-			if t.Status != StatusPending {
+			if t == q.current {
 				return fmt.Errorf("任务正在处理，暂不支持取消")
 			}
+			// 等待/完成/失败均可单独移除（仅进行中不可）
 			q.tasks = append(q.tasks[:i], q.tasks[i+1:]...)
 			return nil
 		}
@@ -209,6 +210,11 @@ func (q *TaskQueue) Retry(id string) (*Task, error) {
 	if t == nil {
 		q.mu.Unlock()
 		return nil, fmt.Errorf("任务 %s 不存在", id)
+	}
+	if t == q.current {
+		// 运行中的任务改回等待会被 runner 结束时的终态覆盖（看似无效的竞态），直接拒绝
+		q.mu.Unlock()
+		return nil, fmt.Errorf("任务正在处理，跑完后再重跑")
 	}
 	t.Status = StatusPending
 	t.Stage = "重新排队"

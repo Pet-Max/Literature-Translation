@@ -33,9 +33,43 @@ function bindNav() {
 }
 
 function bindTitlebar() {
+  const maxBtn = $("win-max");
+  // Windows 惯例：最大化后按钮切「向下还原」❐ 图标并同步提示文案
+  const setMaxIcon = (maxed) => {
+    maxBtn.classList.toggle("restore", maxed);
+    maxBtn.title = maxed ? "向下还原" : "最大化";
+    maxBtn.setAttribute("aria-label", maxBtn.title);
+  };
+  const syncMaxState = async () => {
+    try {
+      setMaxIcon(await rt.WindowIsMaximised());
+    } catch (e) {
+      /* 壳缺失时保持默认 □ */
+    }
+  };
+  const toggleMax = async () => {
+    try {
+      await rt.WindowToggleMaximise();
+      await syncMaxState();
+    } catch (e) {
+      /* 忽略 */
+    }
+  };
   $("win-min").addEventListener("click", () => rt.WindowMinimise());
-  $("win-max").addEventListener("click", () => rt.WindowToggleMaximise());
+  maxBtn.addEventListener("click", toggleMax);
   $("win-close").addEventListener("click", () => rt.Quit());
+  // 双击标题栏最大化/还原（Windows 惯例）；右侧按钮区已是 no-drag，排除之
+  $("titlebar").addEventListener("dblclick", (e) => {
+    if (e.target.closest(".win-controls") || e.target.closest(".theme-btn")) return;
+    toggleMax();
+  });
+  // 系统 Snap / Win+↑ 等非按钮触发也同步图标（防抖）
+  let rzTimer = 0;
+  window.addEventListener("resize", () => {
+    clearTimeout(rzTimer);
+    rzTimer = setTimeout(syncMaxState, 120);
+  });
+  syncMaxState();
 }
 
 // ------------------------------------------------ 任务队列
@@ -131,12 +165,14 @@ function taskCard(t) {
         <button class="btn primary" data-open="${escAttr(t.out_pdf)}">中文 PDF</button>
         <button class="btn" data-open="${escAttr(t.work_dir)}">打开文件夹</button>
         <button class="btn" data-retry="${t.id}">重跑</button>
+        <button class="btn" data-remove="${t.id}" title="从队列移除这张卡片">移除</button>
       </div>`;
   } else if (t.status === "失败") {
     sideActions = `
       <div class="btn-rows">
         <button class="btn primary" data-retry="${t.id}">重试</button>
         <button class="btn" data-open="${escAttr(t.work_dir || t.source_path)}">打开文件夹</button>
+        <button class="btn" data-remove="${t.id}" title="从队列移除这张卡片">移除</button>
       </div>`;
   } else if (t.status === "等待") {
     sideActions = `<div class="btn-rows">
@@ -875,6 +911,37 @@ function bindConnTests() {
   });
 }
 
+// bindCheckUpdate 设置页「关于与更新」卡：手动检查 GitHub 最新版本，
+// 状态机与连接测试同款（空闲→检查中→结果）；Release 页外链走系统浏览器。
+function bindCheckUpdate() {
+  const btn = $("btn-check-update");
+  const out = $("update-result");
+  btn.addEventListener("click", async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = "检查中…";
+    try {
+      const info = await App.CheckUpdate();
+      out.hidden = false;
+      out.innerHTML = info.has_update
+        ? `🆕 发现新版本 <b>${esc(info.latest)}</b>（当前 ${esc(info.current)}）——前往 Release 页下载${info.notes ? `<br>${esc(info.notes)}` : ""}`
+        : `✓ 已是最新（${esc(info.latest || info.current)}）`;
+      localLog("info", info.has_update ? `发现新版本 ${info.latest}` : "已是最新版本");
+    } catch (e) {
+      out.hidden = false;
+      out.textContent = "检查失败：" + e;
+      localLog("warn", "检查更新失败：" + e);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "检查更新";
+    }
+  });
+  $("release-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    rt.BrowserOpenURL(e.currentTarget.getAttribute("href"));
+  });
+}
+
 // 拉取模型：从上游 /v1/models 获取列表，弹出带标题栏的可筛选选择框
 function bindFetchModels() {
   const btn = $("btn-fetch-models");
@@ -961,6 +1028,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     bindTheme();
     bindFetchModels();
     bindConnTests();
+    bindCheckUpdate();
     bindTitlebar();
     bindNav();
     bindDrop();
@@ -1006,6 +1074,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     // 版本号单一来源：Go 侧 internal/version 经绑定给出；壳缺失时退化为 ?
     let VER = "?";
     try { VER = await App.Version(); } catch (e) { /* 无绑定时显示 ? */ }
+    $("about-version").textContent = "当前版本 " + VER;
     const fontsOk = CFG.mineru?.token && CFG.llm?.api_key;
     $("sidebar-status").innerHTML = fontsOk
       ? `${VER} <span class="dot">●</span> 就绪`

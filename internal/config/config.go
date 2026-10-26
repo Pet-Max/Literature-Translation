@@ -155,6 +155,29 @@ func Path() (string, error) {
 	return filepath.Join(dir, "config.json"), nil
 }
 
+// WebviewDataDir 返回 WebView2 内核数据目录：%LOCALAPPDATA%\Literature
+// Translation\WebView2。不设置时 go-webview2 会回退到 %APPDATA%\{exe 完整
+// 文件名}（生成带 .exe 后缀的迷惑性文件夹，且与安装版/便携版共享）。
+// 内核缓存属机器本地数据，放 LOCALAPPDATA 使 Roaming 只保留 config.json。
+// 环境变量缺失时返回空串，走库默认行为，不致启动失败。
+func WebviewDataDir() string {
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		return ""
+	}
+	return filepath.Join(localAppData, DataDirName, "WebView2")
+}
+
+// LegacyWebviewDataDir 返回 v1.0.1 及以前 WebView2 默认数据目录
+// （%APPDATA%\Literature-Translation.exe），供启动时一次性清理（纯缓存）。
+func LegacyWebviewDataDir() string {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		return ""
+	}
+	return filepath.Join(appData, "Literature-Translation.exe")
+}
+
 // Default 返回带默认值的空配置（首次使用）。
 func Default() *Config {
 	return &Config{

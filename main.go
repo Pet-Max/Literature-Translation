@@ -4,6 +4,7 @@ import (
 	"embed"
 
 	"literature-translation/app"
+	"literature-translation/internal/config"
 	"literature-translation/internal/render"
 
 	"github.com/wailsapp/wails/v2"
@@ -42,6 +43,9 @@ func main() {
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,
 			DisableWindowIcon:    false,
+			// 收编 WebView2 内核数据：不设则默认 %APPDATA%\{exe 文件名}（带 .exe
+			// 后缀的文件夹，安装版/便携版混用同一份）。空串走库默认，不致启动失败。
+			WebviewUserDataPath: config.WebviewDataDir(),
 		},
 	})
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -52,6 +53,7 @@ func (a *App) Startup(ctx context.Context) {
 	a.queueCtx = ctx
 	a.cfg = config.MustLoad()
 	a.logBuffer = []LogLine{}
+	a.cleanupLegacyWebviewData()
 	a.queue = NewTaskQueue(a.runTask)
 	a.queue.onIdle = a.afterQueueChange
 	go a.queue.Worker(ctx)
@@ -62,6 +64,25 @@ func (a *App) Startup(ctx context.Context) {
 	}
 	a.pl = pl
 	a.pushLog("info", "应用就绪")
+}
+
+// cleanupLegacyWebviewData 一次性清理 v1.0.1 及以前 WebView2 默认数据目录
+// （纯内核缓存，无用户数据）。仅在新目录生效时才清——防止把回退目标删掉；
+// 目录被其他实例占用时删除失败静默跳过，下次启动再试。
+func (a *App) cleanupLegacyWebviewData() {
+	if config.WebviewDataDir() == "" {
+		return
+	}
+	old := config.LegacyWebviewDataDir()
+	if old == "" {
+		return
+	}
+	if _, err := os.Stat(old); err != nil {
+		return
+	}
+	if err := os.RemoveAll(old); err == nil {
+		a.pushLog("info", "已清理旧版 WebView 缓存目录")
+	}
 }
 
 // newPipeline 用统一的回调集构建 pipeline。
@@ -508,6 +529,98 @@ func (a *App) FetchModels() ([]string, error) {
 	}
 	sort.Strings(ids)
 	return ids, nil
+}
+
+const releaseAPIURL = "https://api.github.com/repos/Pet-Max/Literature-Translation/releases/latest"
+
+// UpdateInfo 检查更新的结果。
+type UpdateInfo struct {
+	HasUpdate bool   `json:"has_update"`
+	Current   string `json:"current"`
+	Latest    string `json:"latest"`
+	URL       string `json:"url"`
+	Notes     string `json:"notes"` // 更新说明首段摘要
+}
+
+// CheckUpdate 查询 GitHub 最新 Release 并与当前版本比较。手动触发：
+// 不后台轮询、无鉴权、无遥测；不做应用内自动更新，更新走 Release 页手动下载。
+func (a *App) CheckUpdate() (*UpdateInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseAPIURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("无法连接 GitHub（检查网络后重试）: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub 返回 %d", resp.StatusCode)
+	}
+	var rel struct {
+		TagName string `json:"tag_name"`
+		HTMLURL string `json:"html_url"`
+		Body    string `json:"body"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil || rel.TagName == "" {
+		return nil, fmt.Errorf("响应解析失败")
+	}
+	info := &UpdateInfo{
+		Current: version.Version,
+		Latest:  strings.TrimSpace(rel.TagName),
+		URL:     rel.HTMLURL,
+		Notes:   summarizeNotes(rel.Body),
+	}
+	info.HasUpdate = compareSemver(info.Latest, info.Current) > 0
+	return info, nil
+}
+
+// compareSemver 比较 vX.Y.Z 形式版本号：>0 表示 a 更新，0 相等，<0 更旧。
+func compareSemver(a, b string) int {
+	num := func(v string) (n [3]int) {
+		v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+		for i, p := range strings.SplitN(v, ".", 3) {
+			n[i], _ = strconv.Atoi(strings.TrimSpace(p))
+		}
+		return
+	}
+	an, bn := num(a), num(b)
+	for i := 0; i < 3; i++ {
+		if an[i] != bn[i] {
+			if an[i] > bn[i] {
+				return 1
+			}
+			return -1
+		}
+	}
+	return 0
+}
+
+// summarizeNotes 提取更新说明的首段摘要：跳过标题行与空行，剥掉
+// markdown 加粗与反引号，超长按 rune 截断。
+func summarizeNotes(body string) string {
+	var out []string
+	for _, ln := range strings.Split(body, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "#") || strings.HasPrefix(ln, "<") {
+			if len(out) > 0 {
+				break
+			}
+			continue
+		}
+		out = append(out, strings.TrimPrefix(ln, "- "))
+		if len(out) >= 2 {
+			break
+		}
+	}
+	s := strings.NewReplacer("**", "", "`", "").Replace(strings.Join(out, " "))
+	if r := []rune(s); len(r) > 160 {
+		s = string(r[:160]) + "…"
+	}
+	return s
 }
 
 // TestLLM 测试翻译模型接口连通性：复用 /models 拉取，返回可用模型数。

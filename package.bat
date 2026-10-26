@@ -45,7 +45,12 @@ if not exist %ISCC% (
 %ISCC% /DAppVersion=%VERNUM% build\installer\installer.iss
 if errorlevel 1 exit /b 1
 
+echo [5/5] checksums (SHA-256) ...
+powershell -NoProfile -Command "Get-FileHash -Algorithm SHA256 'build\bin\Literature-Translation-Setup-%VER%-windows-amd64.exe','build\bin\Literature-Translation-%VER%-windows-amd64-portable.zip' | ForEach-Object { '{0}  {1}' -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } | Set-Content -Encoding ascii 'build\bin\checksums.txt'"
+if errorlevel 1 exit /b 1
+
 echo.
 echo DONE:
 echo   build\bin\Literature-Translation-%VER%-windows-amd64-portable.zip
 echo   build\bin\Literature-Translation-Setup-%VER%-windows-amd64.exe
+echo   build\bin\checksums.txt

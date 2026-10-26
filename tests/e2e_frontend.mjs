@@ -67,7 +67,7 @@ console.log("\n[1] 初始渲染");
   ok("队列渲染 4 张任务卡", (await page.locator("#queue-list .task").count()) === 4);
   ok("任务计数文案", (await page.locator("#queue-count").textContent()) === "4 个任务");
   ok("默认模式=自动", await page.locator('.mode-btn[data-mode="auto"]').evaluate((el) => el.classList.contains("active")));
-  await until(() => page.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.1")));
+  await until(() => page.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.2")));
   ok("版本状态就绪", (await page.locator("#sidebar-status").textContent()).includes("就绪"));
 }
 
@@ -133,6 +133,13 @@ console.log("\n[3] 设置视图");
   await page.keyboard.press("Escape");
   await until(() => page.locator("#model-pop").evaluate((el) => el.hidden));
   ok("Esc 收起弹层", await page.locator("#model-pop").isHidden());
+
+  // 关于与更新卡
+  ok("关于与更新卡按钮", await page.locator("#btn-check-update").isVisible());
+  await page.click("#btn-check-update");
+  await until(() => page.locator("#update-result").evaluate((el) => !el.hidden));
+  ok("检查更新结果=已是最新", (await page.locator("#update-result").textContent()).includes("已是最新"));
+  ok("当前版本行填充", (await page.locator("#about-version").textContent()).includes("v1.0.2"));
 }
 
 // ============ [4] 日志视图 ============
@@ -208,6 +215,14 @@ console.log("\n[7] 回任务视图");
   await until(() => page.locator("#view-tasks").evaluate((el) => el.classList.contains("active")));
   ok("任务视图激活", await page.locator("#view-tasks.active").count() === 1);
   ok("拖放区仍可见", await page.locator("#dropzone").isVisible());
+  // 自绘标题栏：最大化按钮随窗口状态切换图标（Windows 惯例）
+  ok("初始为最大化图标 □", (await page.locator("#win-max.restore").count()) === 0);
+  await page.click("#win-max");
+  const r1 = await until(() => page.locator("#win-max.restore").count().then((n) => (n === 1 ? n : null)));
+  ok("最大化后切还原图标 ❐", r1 === 1);
+  await page.click("#win-max");
+  const r2 = await until(() => page.locator("#win-max.restore").count().then((n) => (n === 0 ? "cleared" : null)));
+  ok("还原后切回 □", r2 === "cleared");
   ok("无 JS 运行时错误", pageErrors.length === 0, pageErrors.join(" | "));
 }
 
@@ -219,7 +234,7 @@ console.log("\n[8] FontList→null 回归");
   page2.on("pageerror", (e) => errors2.push(String(e)));
   await page2.goto(PAGE_URL + "?fontnull", { waitUntil: "load" });
   // 修复后 null 按空列表处理：应用照常走完初始化链，状态栏到达「就绪」
-  await until(() => page2.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.1")));
+  await until(() => page2.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.2")));
   const st2 = await page2.locator("#sidebar-status").textContent();
   ok("null 字体列表下状态就绪", st2.includes("就绪"), st2);
   ok("状态栏无「启动中/异常」残留", !st2.includes("启动中") && !st2.includes("异常"), st2);

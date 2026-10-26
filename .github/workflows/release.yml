@@ -114,15 +114,39 @@ jobs:
           & $iscc /DAppVersion=$ver build/installer/installer.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      - name: Checksums (SHA-256)
+        shell: pwsh
+        run: |
+          $files = @("build/bin/Literature-Translation-${env:TAG}-windows-amd64-portable.zip",
+                     "build/bin/Literature-Translation-Setup-${env:TAG}-windows-amd64.exe")
+          Get-FileHash -Algorithm SHA256 $files |
+            ForEach-Object { '{0}  {1}' -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
+            Set-Content -Encoding ascii build/bin/checksums.txt
+          Get-Content build/bin/checksums.txt
+
       - name: Create GitHub Release and upload
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "$env:TAG"
-          $notes = "Literature Translation $tag`n`n" +
-            "- **安装版** Literature-Translation-Setup-*-windows-amd64.exe：向导式安装，可自定义目录，含开始菜单与卸载器`n" +
-            "- **便携版** Literature-Translation-*-windows-amd64-portable.zip：解压即用，程序与归档自包含`n" +
-            "- 系统要求：Windows 10/11；翻译引擎已内置，详见 README 首次配置"
-          gh release create $tag --title $tag --notes $notes --verify-tag
-          gh release upload $tag "build/bin/Literature-Translation-$tag-windows-$env:ARCH-portable.zip" "build/bin/Literature-Translation-Setup-$tag-windows-$env:ARCH.exe" --clobber
+          # 固定模板自动发布；--generate-notes 追加 GitHub 自动段——合并 PR 后出现
+          # What's Changed / New Contributors，无 PR 时只追加 Full Changelog。
+          # 若组合参数在 CI 异常，去掉 --generate-notes 即回退为纯固定模板。
+          $notes = @"
+          ## 📦 Literature Translation $tag
+
+          ### 📦 分发
+          - 💿 **安装版** Literature-Translation-Setup-$tag-windows-amd64.exe：向导式安装、自定义目录、开始菜单与卸载器
+          - 🎒 **便携版** Literature-Translation-$tag-windows-amd64-portable.zip：解压即用，程序 + 翻译引擎 + 便携 Python 运行时自包含
+          - 🧰 两者均内置翻译引擎与全部依赖，无需自行安装 Python
+          - 🔍 校验：checksums.txt（SHA-256，可用 Get-FileHash / sha256sum 对照）
+
+          ### ⚠️ 已知事项
+          - 🛡️ 未做代码签名：首次运行可能遇到 SmartScreen 提示（「更多信息 → 仍要运行」）
+          - 🪟 仅支持 Windows 10 / 11；PDF 打印依赖系统自带 Microsoft Edge
+          "@
+          $notesFile = "$env:RUNNER_TEMP/release-notes.md"
+          Set-Content -Path $notesFile -Value $notes -Encoding utf8NoBOM
+          gh release create $tag --title $tag --notes-file $notesFile --generate-notes --verify-tag
+          gh release upload $tag "build/bin/Literature-Translation-$tag-windows-$env:ARCH-portable.zip" "build/bin/Literature-Translation-Setup-$tag-windows-$env:ARCH.exe" "build/bin/checksums.txt" --clobber

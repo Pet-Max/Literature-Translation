@@ -6,6 +6,7 @@ package mineru
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -118,7 +119,7 @@ func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 	// 2. PUT 上传（预签名 URL：不要设置 Content-Type 等额外头，
 	// 与 MinerU 官方客户端行为一致，避免签名不匹配 403）
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
-		apply.Data.FileURLs[0], strings.NewReader(string(data)))
+		apply.Data.FileURLs[0], bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
