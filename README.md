@@ -11,7 +11,7 @@
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-blue"></a>
 </p>
 
-Literature Translation 是一个 **英文学术文献翻译桌面应用**。拖入 PDF 或 Markdown，自动走「云端解析 → LLM 翻译 → KaTeX 排版导出」全流程，产出一份带公式、图表、参考文献的中文 PDF。翻译完的文献按每篇一个档案夹自动归档，过程文件完整保留。
+Literature Translation 是一个**英文学术文献翻译桌面应用**。拖入 PDF 或 Markdown，自动走「云端解析 → LLM 翻译 → KaTeX 排版导出」全流程，产出一份带公式、图表、参考文献的中文 PDF。翻译完的文献按每篇一个档案夹自动归档，过程文件完整保留。
 
 ## 界面预览
 
@@ -104,6 +104,16 @@ build.bat
 2. 按需切换入队模式：自动 / 翻译 / 导出
 3. 点「开始」——队列串行处理，可暂停 / 单卡优先
 4. 完成后点「中文 PDF」打开成品，「打开文件夹」直达归档目录
+
+> **看看效果**：[该文献](samples/example-document-cn.pdf) 是 arXiv 论文（2207.00867）经本应用实际翻译导出的成品——排版、公式、参考文献样式即真实所见。对应的[英文原文](samples/example-document-en.pdf)也可以直接拖进应用，自己跑一遍。
+
+**进阶：用环境变量管理密钥（可选）**
+
+四个凭据字段支持环境变量，且优先级高于配置文件，设置后重启应用生效：
+
+`MINERU_TOKEN`（或 `MINERU_API_TOKEN`）、`LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`。
+
+注意：若之后在设置页点过「保存设置」，页面回显的值（含环境变量注入的）会写入 `config.json`。
 
 ## 常见问题
 
