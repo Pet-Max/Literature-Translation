@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import threading
 
 
@@ -61,7 +62,14 @@ class Progress:
             try:
                 os.remove(self._path)
             except OSError:
-                pass
+                # 删除失败（杀软/句柄占用，Windows 上常见）：截断兜底。
+                # 只吞异常不截断的话，旧 meta 会留在文件头混进后续追加流，
+                # 下一轮 resume 又整体作废、文件还只增不减
+                try:
+                    with open(self._path, "w", encoding="utf-8"):
+                        pass
+                except OSError:
+                    pass
 
     def reusable(self, i: int, chunk: str) -> bool:
         """仅当已记录且源段哈希与当前段一致时才可复用。"""
@@ -79,9 +87,14 @@ class Progress:
         self._append({"i": i, "failed": reason})
 
     def _append(self, rec: dict) -> None:
-        with self._lock, open(self._path, "a", encoding="utf-8") as f:
-            if self._cache_key is not None and not self._meta_stamped:
-                f.write(json.dumps({"meta": {"key": self._cache_key}},
-                                   ensure_ascii=False) + "\n")
-                self._meta_stamped = True
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        try:
+            with self._lock, open(self._path, "a", encoding="utf-8") as f:
+                if self._cache_key is not None and not self._meta_stamped:
+                    f.write(json.dumps({"meta": {"key": self._cache_key}},
+                                       ensure_ascii=False) + "\n")
+                    self._meta_stamped = True
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except OSError as e:
+            # 磁盘满/文件被锁：断点丢失但 run 继续（译文仍在内存，最终
+            # 会写进 out_path）；调用栈上抛会杀掉整轮翻译
+            sys.stderr.write(f"[checkpoints] 断点写入失败（本次不落盘）：{e}\n")

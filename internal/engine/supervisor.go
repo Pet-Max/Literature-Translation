@@ -6,6 +6,7 @@ package engine
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -178,8 +179,9 @@ func (s *Supervisor) readLoop(r io.Reader) {
 	}
 }
 
-// Call 发起一次 RPC 并等待响应。
-func (s *Supervisor) Call(op string, payload any, timeout time.Duration) (json.RawMessage, error) {
+// Call 发起一次 RPC 并等待响应。ctx 取消（任务中止/应用退出）会立即
+// 中断等待——引擎 RPC 最长 60 分钟，不能只靠超时兜底。
+func (s *Supervisor) Call(ctx context.Context, op string, payload any, timeout time.Duration) (json.RawMessage, error) {
 	s.mu.Lock()
 	s.nextID++
 	id := s.nextID
@@ -204,6 +206,11 @@ func (s *Supervisor) Call(op string, payload any, timeout time.Duration) (json.R
 		return resp.Result, nil
 	case <-s.done:
 		return nil, errors.New("引擎进程已退出")
+	case <-ctx.Done():
+		s.mu.Lock()
+		delete(s.pend, id)
+		s.mu.Unlock()
+		return nil, ctx.Err()
 	case <-time.After(timeout):
 		s.mu.Lock()
 		delete(s.pend, id)
@@ -214,7 +221,7 @@ func (s *Supervisor) Call(op string, payload any, timeout time.Duration) (json.R
 
 // Ping 自检。
 func (s *Supervisor) Ping() error {
-	_, err := s.Call("ping", map[string]any{}, 15*time.Second)
+	_, err := s.Call(context.Background(), "ping", map[string]any{}, 15*time.Second)
 	return err
 }
 

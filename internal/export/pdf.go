@@ -8,6 +8,8 @@ package export
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -19,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 
@@ -109,7 +112,21 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 				http.FileServer(http.Dir(userFontsDir))))
 		}
 	}
-	srv := &http.Server{Handler: mux}
+	// 访问令牌：服务监听 127.0.0.1 随机端口，但本机其他进程仍可端口扫描
+	// 直连。令牌经 chromedp 会话头下发（见下方 SetExtraHTTPHeaders），
+	// 未携带令牌的请求一律 404——工作目录与用户字体读不走。
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("生成访问令牌失败: %w", err)
+	}
+	token := hex.EncodeToString(raw[:])
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Lit-Token") != token {
+			http.NotFound(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})}
 	go srv.Serve(ln)
 	defer srv.Close()
 	url := fmt.Sprintf("http://127.0.0.1:%d/__final", ln.Addr().(*net.TCPAddr).Port)
@@ -139,6 +156,9 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 	var ktxErr, diag, diag2 string
 	written := outPDF
 	err = chromedp.Run(runCtx,
+		// 本会话所有请求带上访问令牌（对应上方 HTTP 服务的校验）
+		network.Enable(),
+		network.SetExtraHTTPHeaders(network.Headers{"X-Lit-Token": token}),
 		chromedp.Navigate(url),
 		chromedp.Poll(`window.__ktxDone === true`, nil,
 			chromedp.WithPollingTimeout(30*time.Second)),

@@ -139,7 +139,7 @@ func TestE2ETranslateMDArchive(t *testing.T) {
 		Progress: func(done, total, failed int, doneIdx, failedIdx []int, sweep bool) {
 			lastDone = done
 		},
-		Stage:    func(string) {},
+		Stage: func(string) {},
 	})
 	if err != nil {
 		t.Fatalf("创建管线失败: %v", err)

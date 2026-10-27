@@ -27,6 +27,7 @@ import re
 import sys
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -160,14 +161,15 @@ def op_translate(payload: dict) -> dict:
     client = LLMClient(llm_cfg["base_url"], llm_cfg["api_key"],
                        llm_cfg["model"])
     concurrency = max(1, min(int(llm_cfg.get("concurrency", 3)), 8))
-    done_count = [0]
     failed: list[dict] = []
     results: dict[int, str] = {}
     ok_set: set[int] = set()  # 已完成段（文献保留/断点复用/翻译成功）
 
     def emit_progress(sweep: bool = False) -> None:
         bad = {f["i"] for f in failed}
-        ev = {"event": "progress", "done": done_count[0], "total": total,
+        # done 发「成功数」而非「已处理数」：与最终响应 done=total-failed
+        # 同口径，前端「N 段译文」不会因失败段虚高
+        ev = {"event": "progress", "done": len(ok_set - bad), "total": total,
               "failed": len(failed), "done_idx": sorted(ok_set - bad),
               "failed_idx": sorted(bad)}
         if sweep:
@@ -181,12 +183,17 @@ def op_translate(payload: dict) -> dict:
         ok_set.add(i)
 
     def attempt_segment(i: int, frozen, attempts: int) -> str | None:
-        """单段翻译 attempts 次（失败附纠正提示重试），仍不过则登记失败。"""
+        """单段翻译 attempts 次（重试附上次的译文与纠错提示），仍不过则登记失败。
+
+        重试请求带上上次的 assistant 译文：请求本是无状态的，不带的话
+        纠错提示指向的「上一次输出」模型根本看不到，等于盲重试。
+        """
         user_msg = prompt_mod.build_user(frozen.text)
+        history: list[dict] = []
         last_reasons: list[str] = []
         try:
             for attempt in range(1, attempts + 1):
-                resp = client.complete(system, user_msg)
+                resp = client.complete(system, user_msg, history=history)
                 reasons = validator.validate(frozen.text, resp)
                 if not reasons:
                     if attempt > 1:
@@ -194,8 +201,11 @@ def op_translate(payload: dict) -> dict:
                     return resp
                 last_reasons = reasons
                 log(f"第 {i + 1} 段校验未过（第 {attempt} 次）：{'；'.join(reasons)}")
-                user_msg = prompt_mod.build_user(frozen.text) + \
-                    prompt_mod.build_correction(reasons)
+                history = [
+                    {"role": "assistant", "content": resp},
+                    {"role": "user",
+                     "content": prompt_mod.build_correction(reasons)},
+                ]
         except LLMError as e:
             log(f"第 {i + 1} 段调用失败：{e}")
             last_reasons = [str(e)]
@@ -205,27 +215,36 @@ def op_translate(payload: dict) -> dict:
 
     def translate_one(i: int) -> None:
         chunk = chunks[i]
-        if ref_flags[i]:
-            results[i] = chunk  # 文献条目：原文保留，不计费不进校验
-            ok_set.add(i)
-            return
-        if progress.reusable(i, chunk):
-            results[i] = progress.done[i][1]
-            ok_set.add(i)
-            return
-        frozen = freeze(chunk)
-        zh = attempt_segment(i, frozen, QUALITY_ATTEMPTS)
-        if zh is None:
-            # 最终失败：保留原文占位，标记转人工
+        try:
+            if ref_flags[i]:
+                results[i] = chunk  # 文献条目：原文保留，不计费不进校验
+                ok_set.add(i)
+                return
+            if progress.reusable(i, chunk):
+                results[i] = progress.done[i][1]
+                ok_set.add(i)
+                return
+            frozen = freeze(chunk)
+            zh = attempt_segment(i, frozen, QUALITY_ATTEMPTS)
+            if zh is None:
+                # 最终失败：保留原文占位，标记转人工
+                results[i] = chunk
+                return
+            accept_segment(i, frozen, zh)
+        except Exception as e:  # noqa: BLE001 — 单段内部错误只损失该段
+            # 兜底（翻译/回填/断点落盘的意外异常）：登记该段失败并保留
+            # 原文，不让一个畸形响应或磁盘错误杀掉整轮 run。
+            # 宽捕获触发时该段必然尚无失败条目（attempt_segment 只在自身
+            # 兜底路径登记且不外抛），直接 append（GIL 原子），无竞态。
+            log(f"第 {i + 1} 段内部错误：{type(e).__name__}: {e}")
+            traceback.print_exc(file=sys.stderr)
+            failed.append({"i": i, "reasons": f"内部错误: {type(e).__name__}"})
             results[i] = chunk
-            return
-        accept_segment(i, frozen, zh)
 
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = {pool.submit(translate_one, i): i for i in range(total)}
         for fut in as_completed(futures):
-            fut.result()  # worker 内部已兜底，不会抛
-            done_count[0] += 1
+            fut.result()  # worker 已兜底一切异常
             emit_progress()
 
     # 收尾补翻：全池跑完后对失败段集中再捞一轮——此时并发已归零，上游限流/
@@ -234,8 +253,10 @@ def op_translate(payload: dict) -> dict:
         log(f"收尾补翻：{len(failed)} 段未过，{SWEEP_PAUSE} 秒后集中重试")
         time.sleep(SWEEP_PAUSE)
         retry_idx = [f["i"] for f in failed]
-        failed.clear()  # attempt_segment 对仍失败的段会重新登记，避免重复条目
+        # 先发事件再清空：事件如实带上待补翻段（failed 计数与编号），
+        # 不闪「失败 0」的假事件
         emit_progress(sweep=True)
+        failed.clear()  # attempt_segment 对仍失败的段会重新登记，避免重复条目
         for i in retry_idx:
             frozen = freeze(chunks[i])
             zh = attempt_segment(i, frozen, SWEEP_ATTEMPTS)
@@ -317,6 +338,11 @@ def main() -> None:
             req = json.loads(line)
         except json.JSONDecodeError as e:
             emit({"id": None, "ok": False, "error": f"非法 JSON：{e}"})
+            continue
+        if not isinstance(req, dict):
+            # 合法 JSON 但不是对象（数组/字符串/数字）：req.get 会抛
+            # AttributeError 带崩引擎，回错误响应继续服务
+            emit({"id": None, "ok": False, "error": "请求必须是 JSON 对象"})
             continue
         rid, op = req.get("id"), req.get("op", "")
         fn = OPS.get(op)

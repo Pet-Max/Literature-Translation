@@ -104,6 +104,34 @@ class TestSegmenter(unittest.TestCase):
         for piece in ("# A", "第一段。", "第二段。", "## B", "第三段。"):
             self.assertIn(piece, rejoined)
 
+    def test_hard_split_keeps_display_math_whole(self):
+        # 超长块里含单个超限 $$ 公式：宁可整段超长也不从公式中间切断，
+        # 否则 $$ 不配对、freeze 匹配不到，裸 LaTeX 被模型改写
+        giant = "$$\n" + ("x+y=z " * 800) + "\n$$"
+        md = "前导段落文字。\n\n" + giant + "\n\n后缀段落文字。"
+        chunks = segmenter.split(md, max_chars=300)
+        formula_chunk = None
+        for c in chunks:
+            f = freeze(c)
+            # 冻结后不得残留 $$（公式必须整体成占位符，而非被切断裸奔）
+            self.assertNotIn("$$", f.text)
+            if len(f.mapping) == 1:
+                formula_chunk = c
+        # 超限公式所在段超出 max_chars 但保持完整
+        self.assertIsNotNone(formula_chunk)
+        self.assertIn(giant, formula_chunk)
+
+    def test_hard_split_cut_avoids_math(self):
+        # 多个公式交错在超长块里：每个切出的段都不得含有未配对的 $
+        body = "。".join(f"第 {i} 步满足 $x_{i}^2 > {i}$ 以及 $y_{i} < {i}$。" * 3
+                        for i in range(200))
+        chunks = segmenter.split(body, max_chars=500)
+        self.assertGreater(len(chunks), 1)
+        for c in chunks:
+            f = freeze(c)
+            # 段内所有 $ 公式成对冻结成功（无裸 $ 残留）
+            self.assertNotIn("$", f.text)
+
 
 class TestValidator(unittest.TestCase):
     def test_pass(self):

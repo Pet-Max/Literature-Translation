@@ -186,7 +186,7 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 	defer sup.Stop()
 
 	// [0/4] 语言预检：本地抽文本层判定，中文 PDF 直接拒绝（不烧 MinerU 配额）
-	if raw, err := sup.Call("pdf_text", map[string]any{"pdf_path": pdfPath}, 2*time.Minute); err == nil {
+	if raw, err := sup.Call(ctx, "pdf_text", map[string]any{"pdf_path": pdfPath}, 2*time.Minute); err == nil {
 		var pt struct {
 			Text string `json:"text"`
 		}
@@ -214,7 +214,7 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 
 	// [1.5/4] 拼写校准
 	if cfg.Repair.Spelling {
-		raw, err := sup.Call("pdf_text", map[string]any{"pdf_path": pdfPath}, 2*time.Minute)
+		raw, err := sup.Call(ctx, "pdf_text", map[string]any{"pdf_path": pdfPath}, 2*time.Minute)
 		p.stage("拼写校准")
 		if err != nil {
 			p.warnf("文本抽取失败，跳过拼写校准：%v", err)
@@ -261,7 +261,7 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 	}
 
 	// [3/4]+[4/4] 排版导出（渲染 HTTP root = parseDir，图片相对链接有效）
-	finalPath, err := p.export(zhTarget{MDPath: zhMD, Dir: parseDir, Title: stem}, outPDF,
+	finalPath, err := p.export(ctx, zhTarget{MDPath: zhMD, Dir: parseDir, Title: stem}, outPDF,
 		cfg.Export.TOC, cfg.Export.TwoColumn)
 	if err != nil {
 		return nil, err
@@ -330,7 +330,7 @@ func (p *Pipeline) TranslateMD(ctx context.Context, mdPath, outPDFOverride strin
 		p.warnf("第 %d 段需人工处理：%s", f.I+1, f.Reasons)
 	}
 
-	finalPath, err := p.export(zhTarget{MDPath: zhMD, Dir: renderDir, Title: stem}, outPDF,
+	finalPath, err := p.export(ctx, zhTarget{MDPath: zhMD, Dir: renderDir, Title: stem}, outPDF,
 		cfg.Export.TOC, cfg.Export.TwoColumn)
 	if err != nil {
 		return nil, err
@@ -347,7 +347,7 @@ func (p *Pipeline) TranslateMD(ctx context.Context, mdPath, outPDFOverride strin
 }
 
 // ExportMD 纯排版导出（不翻译）。toc/twoCol 传 nil 表示跟随配置。
-func (p *Pipeline) ExportMD(mdPath, outPDF string, toc, twoCol *bool) (string, error) {
+func (p *Pipeline) ExportMD(ctx context.Context, mdPath, outPDF string, toc, twoCol *bool) (string, error) {
 	useTOC, useTwo := p.Cfg.Export.TOC, p.Cfg.Export.TwoColumn
 	if toc != nil {
 		useTOC = *toc
@@ -355,7 +355,7 @@ func (p *Pipeline) ExportMD(mdPath, outPDF string, toc, twoCol *bool) (string, e
 	if twoCol != nil {
 		useTwo = *twoCol
 	}
-	return p.export(zhTarget{MDPath: mdPath, Dir: filepath.Dir(mdPath),
+	return p.export(ctx, zhTarget{MDPath: mdPath, Dir: filepath.Dir(mdPath),
 		Title: strings.TrimSuffix(filepath.Base(mdPath), filepath.Ext(mdPath))}, outPDF, useTOC, useTwo)
 }
 
@@ -377,7 +377,7 @@ func (p *Pipeline) ExportMDPlan(ctx context.Context, mdPath string, plan *Archiv
 	}
 
 	outPDF := filepath.Join(plan.ZhPDFDir, stem+".pdf")
-	finalPath, err := p.export(zhTarget{MDPath: mdPath, Dir: srcDir, Title: stem},
+	finalPath, err := p.export(ctx, zhTarget{MDPath: mdPath, Dir: srcDir, Title: stem},
 		outPDF, p.Cfg.Export.TOC, p.Cfg.Export.TwoColumn)
 	if err != nil {
 		return nil, err
@@ -411,7 +411,7 @@ func (p *Pipeline) translate(ctx context.Context, sup *engine.Supervisor, mdPath
 	if plan != nil {
 		progressPath = plan.ProgressPath
 	}
-	raw, err := sup.Call("translate", map[string]any{
+	raw, err := sup.Call(ctx, "translate", map[string]any{
 		"md_path":         mdPath,
 		"out_path":        outPath,
 		"progress_path":   progressPath,
@@ -448,7 +448,8 @@ type zhTarget struct {
 
 // export 排版渲染 + Edge 打印。中间产物 final.html 写入系统临时目录，
 // 通过 /__final 内存路由提供服务——不再污染用户的文档文件夹。
-func (p *Pipeline) export(t zhTarget, outPDF string, useTOC, useTwo bool) (string, error) {
+// 超时派生自任务 ctx（此前用 Background，任务取消拦不住导出）。
+func (p *Pipeline) export(ctx context.Context, t zhTarget, outPDF string, useTOC, useTwo bool) (string, error) {
 	p.stage("排版中")
 	cfg := p.Cfg
 	mdBytes, err := os.ReadFile(t.MDPath)
@@ -463,7 +464,7 @@ func (p *Pipeline) export(t zhTarget, outPDF string, useTOC, useTwo bool) (strin
 		TwoColumn:   useTwo,
 	})
 	p.logf("排版渲染完成，Edge 打印 PDF …")
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 6*time.Minute)
 	defer cancel()
 	fontsDir, _ := fonts.Dir()
 	// 浏览器启动类故障（Edge 后台更新换版、被安全软件瞬时拦截、内存吃紧等）

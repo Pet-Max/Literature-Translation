@@ -23,6 +23,11 @@ const (
 	baseURL     = "https://mineru.net/api/v4"
 	pollEvery   = 5 * time.Second
 	pollTimeout = 20 * time.Minute
+
+	// 单条目 / 整包解压上限：防 zip 炸弹写满磁盘。上限按实际解压
+	// 字节数计（LimitReader 计数），不信任 zip 头声明的大小。
+	maxZipEntry = 200 << 20
+	maxZipTotal = 500 << 20
 )
 
 // Result 是一次解析的产物。
@@ -105,7 +110,12 @@ func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 		}},
 	}
 	var apply apiResp
-	rawApply, err := postJSON(ctx, token, baseURL+"/file-urls/batch", applyBody, &apply)
+	// 单请求超时：无超时的 http.DefaultClient 遇到黑洞连接（对端不响应）
+	// 会让任务永久卡死——外层 ctx 无 deadline，轮询的 20 分钟上限只在
+	// 两次请求之间检查，救不了挂在单次请求里的情况。
+	applyCtx, cancelApply := context.WithTimeout(ctx, 30*time.Second)
+	rawApply, err := postJSON(applyCtx, token, baseURL+"/file-urls/batch", applyBody, &apply)
+	cancelApply()
 	if err != nil {
 		return nil, err
 	}
@@ -117,8 +127,11 @@ func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 	}
 
 	// 2. PUT 上传（预签名 URL：不要设置 Content-Type 等额外头，
-	// 与 MinerU 官方客户端行为一致，避免签名不匹配 403）
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+	// 与 MinerU 官方客户端行为一致，避免签名不匹配 403）。
+	// 大文件上传给足 10 分钟（200MB 慢链路 + 黑洞连接兜底）。
+	putCtx, cancelPut := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancelPut()
+	req, err := http.NewRequestWithContext(putCtx, http.MethodPut,
 		apply.Data.FileURLs[0], bytes.NewReader(data))
 	if err != nil {
 		return nil, err
@@ -146,7 +159,10 @@ func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 		}
 		var pr apiResp
 		url := baseURL + "/extract-results/batch/" + apply.Data.BatchID
-		if err := getJSON(ctx, token, url, &pr); err != nil {
+		pollCtx, cancelPoll := context.WithTimeout(ctx, 30*time.Second)
+		err := getJSON(pollCtx, token, url, &pr)
+		cancelPoll()
+		if err != nil {
 			time.Sleep(pollEvery) // 瞬时网络问题：跳过本次，继续轮询
 			continue
 		}
@@ -184,6 +200,9 @@ func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 
 // downloadZip 下载结果压缩包到临时文件后解压到 dir。
 func downloadZip(ctx context.Context, url, dir string) error {
+	// 下载给足 10 分钟（结果包可能含整篇文献的图片）。
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -216,15 +235,20 @@ func downloadZip(ctx context.Context, url, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	var totalWritten int64
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
 			continue
 		}
 		name := filepath.Clean(f.Name)
-		if strings.Contains(name, "..") { // 防 zip 路径穿越
+		dst := filepath.Join(dir, name)
+		// 防 zip 路径穿越：解压目标必须落在 dir 内。用路径关系判定
+		// （Rel 结果不含 .. 前缀），而不是字符串包含 ".."——后者会
+		// 误伤 v1..2.md 这类合法文件名，让产物静默缺失。
+		rel, rerr := filepath.Rel(dir, dst)
+		if rerr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			continue
 		}
-		dst := filepath.Join(dir, name)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
@@ -237,11 +261,19 @@ func downloadZip(ctx context.Context, url, dir string) error {
 			rc.Close()
 			return err
 		}
-		_, err = io.Copy(out, rc)
+		// 解压限额按实际字节数计，不信任 zip 头声明的大小
+		n, err := io.Copy(out, io.LimitReader(rc, maxZipEntry+1))
 		out.Close()
 		rc.Close()
 		if err != nil {
 			return err
+		}
+		if n > maxZipEntry {
+			return fmt.Errorf("zip 条目 %s 解压超过 %d MB 上限", name, maxZipEntry>>20)
+		}
+		totalWritten += n
+		if totalWritten > maxZipTotal {
+			return fmt.Errorf("zip 解压总量超过 %d MB 上限，疑似异常压缩包", maxZipTotal>>20)
 		}
 	}
 	return nil

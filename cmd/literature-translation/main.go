@@ -234,7 +234,7 @@ func printCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = p.ExportMD(fs.Arg(0), *out, toc, twoCol)
+	_, err = p.ExportMD(context.Background(), fs.Arg(0), *out, toc, twoCol)
 	return err
 }
 

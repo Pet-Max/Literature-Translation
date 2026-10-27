@@ -33,6 +33,41 @@ func TestBmAlsoRewritten(t *testing.T) {
 	}
 }
 
+// TestUnsafeHTMLescaped 回归：源 Markdown 里的原始 HTML 必须被转义成
+// 纯文本（goldmark 默认行为，禁用 WithUnsafe）。译文/中文稿若混入
+// <script> 或事件属性，导出页加载时不得执行——headless 浏览器里跑脚本
+// 等于把工作目录读走（本地文件服务同源）。
+func TestUnsafeHTMLescaped(t *testing.T) {
+	md := "正文段落。\n\n<script>alert(1)</script>\n\n<img src=x onerror=alert(2)>\n\n[a](javascript:alert(3))"
+	out := Build(md, Options{Title: "安全冒烟"})
+	if strings.Contains(strings.ToLower(out), "<script>alert") {
+		t.Errorf("script 标签未被转义：%s", out[:min(len(out), 300)])
+	}
+	if strings.Contains(strings.ToLower(out), "onerror=") {
+		t.Errorf("事件属性未被转义")
+	}
+	if strings.Contains(strings.ToLower(out), `href="javascript:`) {
+		t.Errorf("javascript: 链接未被清洗")
+	}
+	// 自身的 KaTeX 挂载脚本必须仍为外链（CSP script-src 'self' 允许）
+	if !strings.Contains(out, `<script src="/assets/katex/katex.min.js"></script>`) ||
+		!strings.Contains(out, `<script src="/assets/katex/render.js"></script>`) {
+		t.Error("KaTeX 外链脚本缺失")
+	}
+	if strings.Contains(out, "<script>\n") {
+		t.Error("不应再有内联 <script>（CSP 禁止内联脚本）")
+	}
+	// CSP 头必须存在且收紧脚本源
+	if !strings.Contains(out, `http-equiv="Content-Security-Policy"`) ||
+		!strings.Contains(out, "script-src 'self'") {
+		t.Error("缺少 CSP meta 或 script-src 未收紧")
+	}
+	// 数学公式回填不受影响（占位符 → data-tex span）
+	if !strings.Contains(out, "ktx-disp") || !strings.Contains(out, "正文段落") {
+		t.Error("正文或公式结构丢失")
+	}
+}
+
 // MarkdownToHTMLForTest 供测试访问内部转换。
 func MarkdownToHTMLForTest(md string) string {
 	return markdownToHTML(md)

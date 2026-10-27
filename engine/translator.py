@@ -28,14 +28,22 @@ class LLMClient:
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
-    def complete(self, system: str, user: str, temperature: float = 0.1) -> str:
-        """一次补全。网络层自动重试；仍失败抛 LLMError。"""
+    def complete(self, system: str, user: str, temperature: float = 0.1,
+                 history: list[dict] | None = None) -> str:
+        """一次补全。网络层自动重试；仍失败抛 LLMError。
+
+        history 为可选的追加消息（质量重试时带上次的 assistant 译文
+        与纠错指令，让模型看到自己上一次的输出）。非流式。
+        """
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        if history:
+            messages.extend(history)
         body = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": messages,
             "temperature": temperature,
         }
         last_err = ""
@@ -49,6 +57,11 @@ class LLMClient:
                         # 200 但 body 非 JSON：多为接口地址配错（如打到了网页）
                         raise LLMError(
                             f"返回了非 JSON 内容（检查接口地址是否正确）: {resp.text[:120]}") from err
+                    if not isinstance(data, dict):
+                        # 合法 JSON 但非对象（如顶层数组）：后续 .get 会抛
+                        # AttributeError 穿透重试层，这里显式报成人话
+                        raise LLMError(
+                            f"返回了非预期格式（应为 JSON 对象）: {str(data)[:120]}")
                     content = (data.get("choices") or [{}])[0] \
                         .get("message", {}).get("content")
                     if not content or not content.strip():

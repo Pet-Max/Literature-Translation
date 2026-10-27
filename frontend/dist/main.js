@@ -96,11 +96,13 @@ const cardSeen = {};
 function visibleStages(t) {
   // 渐进显示：未到的阶段不存在。
   // 等待→只有第一枚；进行→当前+1；完成→全部；失败→停在失败那一步。
+  // 定位优先用 stage（「拼写校准」这类子步骤只改 stage 不改 status）；
+  // 「解析中（排队中）」这类形态映射不到时落到 status。
   const total = stagesOf(t).length;
   if (t.status === "等待") return 1;
   if (t.status === "完成") return total;
   const idx = stageIdxOf(t);
-  const cur = idx[t.status] ?? idx[t.stage];
+  const cur = idx[t.stage] ?? idx[t.status];
   if (t.status === "失败") return (cur === undefined ? 0 : cur) + 1;
   return cur === undefined ? 1 : Math.min(cur + 1, total);
 }
@@ -108,11 +110,16 @@ function visibleStages(t) {
 function taskCard(t) {
   const code = fileCode(t.source_path);
   const fileName = t.source_path.split(/[\\/]/).pop();
-  const chipClass = { "解析中": "run", "拼写校准": "run", "翻译中": "run", "排版中": "run", "完成": "ok", "失败": "bad" }[t.status] || "";
+  // chip 文案：拼写校准是解析的子步骤（Status 仍是枚举「解析中」），
+  // 徽章按 stage 显示更精确一步
+  const chipText = t.status === "解析中" && t.stage === "拼写校准" ? "拼写校准" : t.status;
+  const chipClass = { "解析中": "run", "拼写校准": "run", "翻译中": "run", "排版中": "run", "完成": "ok", "失败": "bad" }[chipText] || "";
 
   // 步进器：只渲染已到达的阶段，成功一步亮一步
+  // cur 与 visibleStages 同口径用 stage 优先定位（拼写校准期间「解析」标 ✓）
   const vis = visibleStages(t);
-  const cur = stageIdxOf(t)[t.status];
+  const idx = stageIdxOf(t);
+  const cur = idx[t.stage] ?? idx[t.status];
   const prevVis = lastStageCount[t.id] ?? 1;
   let stages = "";
   for (let i = 0; i < vis; i++) {
@@ -180,8 +187,11 @@ function taskCard(t) {
     const failPart = t.failed > 0 && t.kind !== "export" ? ` · ${t.failed} 段失败保留英文` : "";
     meta = t.kind === "export" ? "排版完成" : `${t.done} 段译文${failPart}` + (t.refs_kept > 0 ? ` · 参考文献 ${t.refs_kept} 条保留原文` : "");
   } else if (t.status === "失败") {
-    // 引擎未就绪/建归档失败/语言预检被拒发生在解析之前——别误标"卡在「解析」"
-    const started = t.done > 0 || t.total > 0 || stageIdxOf(t)[t.stage] !== undefined;
+    // 引擎未就绪/建归档失败/语言预检被拒发生在解析之前——别误标"卡在「解析」"。
+    // 「已开始」= 流程推进到过任一实际阶段（解析中/拼写校准/翻译中/排版中），
+    // 或 MinerU 轮询已上报过状态（解析中（…）形态）。
+    const stageKnown = stageIdxOf(t)[t.stage] !== undefined || /^解析中（/.test(t.stage || "");
+    const started = t.done > 0 || t.total > 0 || stageKnown;
     meta = started ? `${kindLabel} · 卡在「${stagesOf(t)[vis - 1]}」这一步`
                    : `${kindLabel} · 未能开始（详见错误信息）`;
   } else {
@@ -221,12 +231,12 @@ function taskCard(t) {
   cardSeen[t.id] = true;
   return `
   <div class="task${enterCls}" id="task-${t.id}">
-    <div class="codetile${t.kind !== "pdf" ? " md" : ""}" title="${esc(t.source_path)}">
+    <div class="codetile${t.kind !== "pdf" ? " md" : ""}" title="${escAttr(t.source_path)}">
       <div class="codetile-code">${esc(code)}</div>
       <div class="codetile-kind">${t.kind === "pdf" ? "文献原文" : t.kind === "export" ? "中文稿" : "已解析稿"}</div>
     </div>
     <div class="task-body">
-      <div class="task-name" title="${esc(t.source_path)}">${esc(fileName)}</div>
+      <div class="task-name" title="${escAttr(t.source_path)}">${esc(fileName)}</div>
       <div class="task-meta">${esc(meta)}</div>
       <div class="stepper">${stages}</div>
       ${progressHtml}
@@ -234,16 +244,21 @@ function taskCard(t) {
       ${sweepNote}
     </div>
     <div class="task-side">
-      <span class="status-chip ${chipClass}">${esc(t.status)}</span>
+      <span class="status-chip ${chipClass}">${esc(chipText)}</span>
       ${sideActions}
     </div>
   </div>`;
 }
 
 let QUEUE_STATE = { running: false, paused: true, pending: 0 };
+// 刷新令牌：task:update 与 queue:change 几乎同时到达时会并发发起两次
+// 刷新，先发出的慢响应后落地会把 UI 拉回旧状态——比对令牌丢弃过期响应
+let queueReqSeq = 0;
 
 function renderQueue() {
+  const my = ++queueReqSeq;
   Promise.all([App.QueueList(), App.QueueState()]).then(([tasks, st]) => {
+    if (my !== queueReqSeq) return; // 已有更新的刷新，本次结果作废
     QUEUE_STATE = st;
     const list = $("queue-list");
     list.innerHTML = tasks.map(taskCard).join("");
@@ -285,6 +300,8 @@ function bindCardButtons() {
     b.addEventListener("click", async () => {
       try {
         await App.QueueRetry(b.dataset.retry);
+        // 重跑从第一阶段重来：清掉残留的高阶段数，新阶段才有入场动画
+        delete lastStageCount[b.dataset.retry];
         renderQueue();
       } catch (e) {
         // 运行中的任务后端会拒绝重排队——弹窗说明，不再静默无反应
@@ -295,7 +312,12 @@ function bindCardButtons() {
   document.querySelectorAll("[data-remove]").forEach((b) => {
     if (b.dataset.bound) return;
     b.dataset.bound = "1";
-    b.addEventListener("click", () => App.QueueRemove(b.dataset.remove).then(() => renderQueue()));
+    b.addEventListener("click", () => App.QueueRemove(b.dataset.remove).then(() => {
+      // 卡片已移除：两条渲染缓存同步清，防缓慢泄漏
+      delete lastStageCount[b.dataset.remove];
+      delete cardSeen[b.dataset.remove];
+      renderQueue();
+    }));
   });
   document.querySelectorAll("[data-startone]").forEach((b) => {
     if (b.dataset.bound) return;
@@ -376,7 +398,18 @@ function bindQueueButtons() {
   if (!clear.dataset.bound) {
     clear.dataset.bound = "1";
     clear.addEventListener("click", async () => {
-      try { await App.QueueClearFinished(); renderQueue(); }
+      try {
+        const kept = await App.QueueClearFinished();
+        // 只清掉被移除任务的渲染缓存，留下的卡片不重播入场动画
+        const ids = new Set((kept || []).map((t) => t.id));
+        for (const id of Object.keys(lastStageCount)) {
+          if (!ids.has(id)) delete lastStageCount[id];
+        }
+        for (const id of Object.keys(cardSeen)) {
+          if (!ids.has(id)) delete cardSeen[id];
+        }
+        renderQueue();
+      }
       catch (e) { localLog("error", "清理失败：" + e); }
     });
   }
@@ -404,7 +437,16 @@ async function loadSettings() {
   $("cfg-llm-url").value = CFG.llm?.base_url || "";
   $("cfg-llm-key").value = CFG.llm?.api_key || "";
   $("cfg-llm-model").value = CFG.llm?.model || "";
-  $("cfg-llm-conc").value = String(CFG.llm?.concurrency || 3);
+  const concSel = $("cfg-llm-conc");
+  concSel.value = String(CFG.llm?.concurrency || 3);
+  // 手改配置文件设了选项外的并发值（2/4 等）时补一个临时选项，避免下拉显示空白
+  if (concSel.selectedIndex < 0) {
+    const o = document.createElement("option");
+    o.value = concSel.value;
+    o.textContent = concSel.value;
+    concSel.appendChild(o);
+    concSel.value = o.value;
+  }
   $("cfg-bilingual").checked = !!CFG.export?.bilingual;
   $("cfg-toc").checked = !!CFG.export?.toc;
   $("cfg-twocolumn").checked = !!CFG.export?.two_column;
@@ -1117,10 +1159,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     let VER = "?";
     try { VER = await App.Version(); } catch (e) { /* 无绑定时显示 ? */ }
     $("about-version").textContent = "当前版本 " + VER;
+    // DOM 方式写入（不拼 innerHTML）：内容即使将来来源变化也不构成注入面
     const fontsOk = CFG.mineru?.token && CFG.llm?.api_key;
-    $("sidebar-status").innerHTML = fontsOk
-      ? `${VER} <span class="dot">●</span> 就绪`
-      : `${VER} <span style="color:var(--bad)">●</span> 待配置`;
+    const sb = $("sidebar-status");
+    sb.textContent = `${VER} `;
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.textContent = "●";
+    if (!fontsOk) dot.style.color = "var(--bad)";
+    sb.appendChild(dot);
+    sb.appendChild(document.createTextNode(fontsOk ? " 就绪" : " 待配置"));
   } catch (e) {
     // 初始化链断裂时状态栏会永远停在 index.html 的占位文案「引擎启动中…」，
     // 这里把真实错误亮出来，避免启动故障伪装成正常状态

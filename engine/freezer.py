@@ -45,6 +45,26 @@ class Frozen:
     mapping: dict[int, str] = field(default_factory=dict)
 
 
+def protected_spans(text: str) -> list[tuple[int, int]]:
+    """返回冻结区（代码/公式/表格/图片）的 (start, end) 字符区间，重叠已合并。
+
+    供切段使用：切点不得落进区间内部——把 $$…$$ 或围栏代码从中间
+    切断会让定界符不配对，冻结正则匹配不到，裸 LaTeX 喂给模型被改写。
+    """
+    spans: list[tuple[int, int]] = []
+    for pat in _PATTERNS:
+        for m in pat.finditer(text):
+            spans.append(m.span())
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for s, e in spans:
+        if merged and s < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return merged
+
+
 def freeze(text: str, start: int = 1) -> Frozen:
     """把 text 中的公式/代码/图片/表格替换为占位符。
 

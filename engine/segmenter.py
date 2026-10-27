@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import re
 
+import freezer
+
 HEADING_RE = re.compile(r"(?m)^#{1,6}\s")
 REF_HEAD_RE = re.compile(r"^\[\d{1,3}\]\s")
 DEFAULT_MAX_CHARS = 3000
@@ -72,15 +74,44 @@ def split(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> list[str]:
 
 
 def _hard_split(block: str, max_chars: int) -> list[str]:
-    """超长单块的硬切：优先在换行处断开。"""
+    """超长单块的硬切：优先在换行处断开。
+
+    切点不落进冻结区（代码/公式/表格/图片）内部——$$…$$ 被从中间
+    切断后定界符不配对，freeze 匹配不到，裸 LaTeX 会被模型改写。
+    区间本身超限时宁可整段超长也不截断。
+    """
+    spans = freezer.protected_spans(block)
+
+    def span_at(pos: int) -> tuple[int, int] | None:
+        # 严格落在区间内部（恰好在边界上不算被切）
+        for s, e in spans:
+            if s < pos < e:
+                return (s, e)
+        return None
+
     parts: list[str] = []
     rest = block
+    base = 0  # rest 在 block 中的起始偏移（spans 用 block 坐标）
     while len(rest) > max_chars:
         window = rest[:max_chars]
         nl = window.rfind("\n")
         cut = nl if nl > max_chars // 2 else max_chars
+        hit = span_at(base + cut)
+        if hit is not None:
+            s, e = hit
+            if s - base > max_chars // 2:
+                cut = s - base  # 切在冻结区起点，区间整体留给下一段
+            else:
+                cut = min(e - base, len(rest))  # 区间跟着本段走，宁可超长
+        if cut <= 0 or cut >= len(rest):
+            # 单个超限冻结区独占：整段保留（同时防死循环）
+            parts.append(rest)
+            rest = ""
+            break
         parts.append(rest[:cut])
-        rest = rest[cut:].lstrip("\n")
+        nxt = rest[cut:].lstrip("\n")
+        base += len(rest) - len(nxt)
+        rest = nxt
     if rest:
         parts.append(rest)
     return parts

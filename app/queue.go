@@ -124,12 +124,12 @@ func (q *TaskQueue) PendingCount() int {
 }
 
 // Add 入队一个任务（同源路径去重）。mode 记录入队时的模式档位。
-func (q *TaskQueue) Add(kind, path, mode string) (*Task, error) {
+func (q *TaskQueue) Add(kind, path, mode string) (Task, error) {
 	q.mu.Lock()
 	for _, t := range q.tasks {
 		if t.SourcePath == path && (t.Status == StatusPending || t == q.current) {
 			q.mu.Unlock()
-			return t, nil
+			return *t, nil
 		}
 	}
 	code := codeRe.FindString(baseName(path))
@@ -149,27 +149,45 @@ func (q *TaskQueue) Add(kind, path, mode string) (*Task, error) {
 	q.tasks = append(q.tasks, t)
 	q.mu.Unlock()
 	q.wake()
-	return t, nil
+	return *t, nil
 }
 
-// List 全部任务快照。
-func (q *TaskQueue) List() []*Task {
+// List 全部任务快照（值拷贝）。返回快照而非指针：前端绑定 goroutine
+// 序列化 JSON 时不能与进度回调的并发写入共享同一块内存。
+// 约定：Task 的切片字段（DoneIdx/FailedIdx）只整体替换、从不原地改，
+// 因此结构体浅拷贝即安全。
+func (q *TaskQueue) List() []Task {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	out := make([]*Task, len(q.tasks))
-	copy(out, q.tasks)
+	out := make([]Task, len(q.tasks))
+	for i, t := range q.tasks {
+		out[i] = *t
+	}
 	return out
 }
 
-// Current 正在处理的任务（无则 nil）。
-func (q *TaskQueue) Current() *Task {
+// Running 是否有任务正在处理。
+func (q *TaskQueue) Running() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.current
+	return q.current != nil
+}
+
+// Mutate 在队列锁内对当前任务执行变更，返回变更后的值快照。
+// 所有跨 goroutine 的 Task 字段写入（进度/阶段回调、runTask）都走这里，
+// 队列锁由此同时保护任务本体，不再只保护切片与 current 指针。
+func (q *TaskQueue) Mutate(fn func(*Task)) (Task, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.current == nil {
+		return Task{}, false
+	}
+	fn(q.current)
+	return *q.current, true
 }
 
 // ClearFinished 清掉已完成/失败的任务卡片。
-func (q *TaskQueue) ClearFinished() []*Task {
+func (q *TaskQueue) ClearFinished() []Task {
 	q.mu.Lock()
 	kept := q.tasks[:0]
 	for _, t := range q.tasks {
@@ -201,7 +219,7 @@ func (q *TaskQueue) Remove(id string) error {
 }
 
 // Retry 把一个失败/完成任务重置为等待并重新处理。
-func (q *TaskQueue) Retry(id string) (*Task, error) {
+func (q *TaskQueue) Retry(id string) (Task, error) {
 	q.mu.Lock()
 	var t *Task
 	for _, cand := range q.tasks {
@@ -212,21 +230,24 @@ func (q *TaskQueue) Retry(id string) (*Task, error) {
 	}
 	if t == nil {
 		q.mu.Unlock()
-		return nil, fmt.Errorf("任务 %s 不存在", id)
+		return Task{}, fmt.Errorf("任务 %s 不存在", id)
 	}
 	if t == q.current {
 		// 运行中的任务改回等待会被 runner 结束时的终态覆盖（看似无效的竞态），直接拒绝
 		q.mu.Unlock()
-		return nil, fmt.Errorf("任务正在处理，跑完后再重跑")
+		return Task{}, fmt.Errorf("任务正在处理，跑完后再重跑")
 	}
 	t.Status = StatusPending
 	t.Stage = "重新排队"
 	t.Err = ""
 	t.Done, t.Total, t.Failed = 0, 0, 0
+	t.RefsKept = 0
+	// 上次产物一并清空：重排队的卡片不该显示旧成品路径
+	t.OutPDF, t.ZHMD, t.WorkDir = "", "", ""
 	t.DoneIdx, t.FailedIdx, t.Sweeping = nil, nil, false
 	q.mu.Unlock()
 	q.wake()
-	return t, nil
+	return *t, nil
 }
 
 func baseName(path string) string {

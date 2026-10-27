@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,22 +49,24 @@ func NewApp() *App { return &App{} }
 
 // Startup Wails 启动钩子：加载配置、构建 pipeline、启动队列 worker。
 // 引擎初始化失败不阻断启动：队列照常工作，任务在运行时惰性重试引擎。
+// 注意顺序：先完成 a.pl 的唯一一次写入、再启动 worker goroutine——
+// 两者并发写 a.pl 会构成数据竞争（runTask 的惰性重试也写它）。
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	a.queueCtx = ctx
 	a.cfg = config.MustLoad()
 	a.logBuffer = []LogLine{}
 	a.cleanupLegacyWebviewData()
-	a.queue = NewTaskQueue(a.runTask)
+	a.queue = NewTaskQueue(a.runTaskSafe)
 	a.queue.onIdle = a.afterQueueChange
-	go a.queue.Worker(ctx)
 	pl, err := a.newPipeline()
 	if err != nil {
 		a.pushLog("error", "引擎初始化失败（任务运行时会自动重试）: "+err.Error())
-		return
+	} else {
+		a.pl = pl
+		a.pushLog("info", "应用就绪")
 	}
-	a.pl = pl
-	a.pushLog("info", "应用就绪")
+	go a.queue.Worker(ctx)
 }
 
 // cleanupLegacyWebviewData 一次性清理 v1.0.1 及以前 WebView2 默认数据目录
@@ -86,6 +89,8 @@ func (a *App) cleanupLegacyWebviewData() {
 }
 
 // newPipeline 用统一的回调集构建 pipeline。
+// 回调跑在 pipeline 的进度 goroutine 里，与 worker 并发——所有 Task
+// 字段写入一律走 queue.Mutate（队列锁内），推送的是值快照。
 func (a *App) newPipeline() (*pipeline.Pipeline, error) {
 	return pipeline.New(a.cfg, pipeline.Callbacks{
 		Log: func(level, msg string) {
@@ -93,37 +98,37 @@ func (a *App) newPipeline() (*pipeline.Pipeline, error) {
 			runtime.EventsEmit(a.ctx, "log:line", line)
 		},
 		Progress: func(done, total, failed int, doneIdx, failedIdx []int, sweep bool) {
-			if t := a.queue.Current(); t != nil {
+			a.setTask(func(t *Task) {
 				t.Done, t.Total, t.Failed = done, total, failed
 				t.DoneIdx, t.FailedIdx, t.Sweeping = doneIdx, failedIdx, sweep
-				if t.Status != StatusDone && t.Status != StatusFailed {
+				// 状态只前进：迟到的事件不能把「排版中」拉回「翻译中」
+				if t.Status != StatusDone && t.Status != StatusFailed &&
+					t.Status != StatusRendering {
 					t.Status = StatusTranslating
 				}
-				a.emitTask(t)
-			}
+			})
 		},
 		ParseState: func(state string) {
-			if t := a.queue.Current(); t != nil {
-				// MinerU 原始状态词翻译成人话，未知值原样透传
-				name := map[string]string{
-					"pending": "排队中", "running": "解析中", "done": "已完成", "failed": "失败",
-				}[state]
-				if name == "" {
-					name = state
-				}
-				t.Stage = "解析中（" + name + "）"
-				a.emitTask(t)
+			// MinerU 原始状态词翻译成人话，未知值原样透传
+			name := map[string]string{
+				"pending": "排队中", "running": "解析中", "done": "已完成", "failed": "失败",
+			}[state]
+			if name == "" {
+				name = state
 			}
+			a.setTask(func(t *Task) { t.Stage = "解析中（" + name + "）" })
 		},
 		Stage: func(stage string) {
-			if t := a.queue.Current(); t != nil {
-				t.Status = TaskStatus(stage)
-				// 同步 Stage：失败时前端按 Stage 定位失败步骤，
-				// 不同步的话会一直停在解析期写入的"解析中（…）"，
-				// 失败卡片永远误标为卡在「解析」
+			a.setTask(func(t *Task) {
+				// Stage 始终同步（失败时前端按 Stage 定位失败步骤）；
+				// Status 只认状态机枚举——「拼写校准」这类子步骤只改 Stage，
+				// 不往 Status 里写非枚举值
 				t.Stage = stage
-				a.emitTask(t)
-			}
+				switch TaskStatus(stage) {
+				case StatusParsing, StatusTranslating, StatusRendering:
+					t.Status = TaskStatus(stage)
+				}
+			})
 		},
 	})
 }
@@ -136,13 +141,28 @@ func (a *App) BeforeClose(ctx context.Context) bool { return false }
 
 // ---------------------------------------------------------------- 事件
 
-func (a *App) emitTask(t *Task) {
+// emitTask 推送任务快照（值拷贝：前端拿到的 JSON 不与后续写入共享内存）。
+func (a *App) emitTask(t Task) {
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "task:update", t)
 	}
 }
 
+// setTask 在队列锁内更新当前任务并推送快照。runTask 与 pipeline 回调
+// 的所有 Task 字段写入统一走这里。
+func (a *App) setTask(fn func(*Task)) {
+	if t, ok := a.queue.Mutate(fn); ok {
+		a.emitTask(t)
+	}
+}
+
 // ---------------------------------------------------------------- 日志
+
+// logEmit 记一条日志并立即推给前端。必须用 pushLog 的返回值而非回读
+// logBuffer 索引：并发追加可能触发切片重建，索引读会拿到搬迁前的旧内存。
+func (a *App) logEmit(level, msg string) {
+	runtime.EventsEmit(a.ctx, "log:line", a.pushLog(level, msg))
+}
 
 func (a *App) pushLog(level, msg string) LogLine {
 	line := LogLine{Time: time.Now().Format("15:04:05"), Level: level, Msg: msg}
@@ -169,84 +189,111 @@ func (a *App) ClearLog() { a.logMu.Lock(); a.logBuffer = []LogLine{}; a.logMu.Un
 
 // ---------------------------------------------------------------- 任务
 
+// runTaskSafe runTask 的 panic 兜底：任何一处 panic 都记为该任务失败
+// （调用栈进日志页），不再带崩整个 Wails 进程。
+func (a *App) runTaskSafe(t *Task) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("内部错误: %v", r)
+			stack := string(debug.Stack())
+			if r := []rune(stack); len(r) > 2000 {
+				stack = string(r[:2000]) + "…"
+			}
+			a.setTask(func(x *Task) {
+				x.Status = StatusFailed
+				x.Err = err.Error()
+			})
+			a.logEmit("error", t.Code+" 内部错误，调用栈：\n"+stack)
+		}
+	}()
+	return a.runTask(t)
+}
+
 // runTask 队列 worker 的执行体：按任务类型调 pipeline 并维护状态机。
+// 注意：t 的可变字段（Status/Stage/Done 等）只经 setTask 在队列锁内改；
+// 本函数直接读的 t.Code/Kind/SourcePath 创建后不再变化，无竞争。
 func (a *App) runTask(t *Task) error {
 	// 引擎此前初始化失败（如 engine 目录缺失）时惰性重试一次
 	if a.pl == nil {
 		pl, err := a.newPipeline()
 		if err != nil {
-			t.Status = StatusFailed
-			t.Err = "引擎未就绪: " + err.Error()
-			a.emitTask(t)
-			a.pushLog("error", t.Code+" 失败: "+t.Err)
-			runtime.EventsEmit(a.ctx, "log:line", a.logBuffer[len(a.logBuffer)-1])
+			a.setTask(func(x *Task) {
+				x.Status = StatusFailed
+				x.Err = "引擎未就绪: " + err.Error()
+			})
+			a.logEmit("error", t.Code+" 失败: 引擎未就绪: "+err.Error())
 			return err
 		}
 		a.pl = pl
 		a.pushLog("info", "引擎已就绪")
 	}
-	t.Status = StatusPending
-	t.Err = ""
-	t.DoneIdx, t.FailedIdx, t.Sweeping = nil, nil, false
-	a.emitTask(t)
+	a.setTask(func(x *Task) {
+		x.Status = StatusPending
+		x.Err = ""
+		x.DoneIdx, x.FailedIdx, x.Sweeping = nil, nil, false
+	})
 
 	// 归档方案：每篇文献在归档根下建独立档案夹（四类产物 + _process）
 	plan, err := pipeline.NewArchivePlan(a.cfg.Export.OutputDir, t.SourcePath)
 	if err != nil {
-		t.Status = StatusFailed
-		t.Err = "建立归档失败: " + err.Error()
-		a.emitTask(t)
-		a.pushLog("error", t.Code+" 失败: "+t.Err)
-		runtime.EventsEmit(a.ctx, "log:line", a.logBuffer[len(a.logBuffer)-1])
+		a.setTask(func(x *Task) {
+			x.Status = StatusFailed
+			x.Err = "建立归档失败: " + err.Error()
+		})
+		a.logEmit("error", t.Code+" 失败: 建立归档失败: "+err.Error())
 		return err
 	}
 
 	var res *pipeline.Result
 	switch t.Kind {
 	case "pdf":
-		t.Status = StatusParsing
-		t.Stage = "MinerU 精准解析"
-		a.emitTask(t)
+		a.setTask(func(x *Task) {
+			x.Status = StatusParsing
+			x.Stage = "MinerU 精准解析"
+		})
 		res, err = a.pl.RunPDF(a.queueCtx, t.SourcePath, "", plan)
 	case "md":
-		t.Status = StatusTranslating
-		t.Stage = "翻译中"
-		a.emitTask(t)
+		a.setTask(func(x *Task) {
+			x.Status = StatusTranslating
+			x.Stage = "翻译中"
+		})
 		res, err = a.pl.TranslateMD(a.queueCtx, t.SourcePath, "", plan)
 	case "export":
-		t.Status = StatusRendering
-		t.Stage = "排版中"
-		a.emitTask(t)
+		a.setTask(func(x *Task) {
+			x.Status = StatusRendering
+			x.Stage = "排版中"
+		})
 		res, err = a.pl.ExportMDPlan(a.queueCtx, t.SourcePath, plan)
 	default:
 		return fmt.Errorf("未知任务类型: %s", t.Kind)
 	}
 
 	if err != nil {
-		t.Status = StatusFailed
-		t.Err = err.Error()
-		a.emitTask(t)
-		a.pushLog("error", t.Code+" 失败: "+err.Error())
-		runtime.EventsEmit(a.ctx, "log:line", a.logBuffer[len(a.logBuffer)-1])
+		a.setTask(func(x *Task) {
+			x.Status = StatusFailed
+			x.Err = err.Error()
+		})
+		a.logEmit("error", t.Code+" 失败: "+err.Error())
 		return err
 	}
 
-	t.Status = StatusDone
-	t.Stage = "完成"
-	t.OutPDF = res.OutPDF
-	t.ZHMD = res.ZHMD
-	t.WorkDir = res.WorkDir
-	t.Done = res.Done
-	t.Total = res.Total
-	t.Failed = len(res.Failed)
-	t.RefsKept = res.KeptReferences
-	a.emitTask(t)
+	a.setTask(func(x *Task) {
+		x.Status = StatusDone
+		x.Stage = "完成"
+		x.OutPDF = res.OutPDF
+		x.ZHMD = res.ZHMD
+		x.WorkDir = res.WorkDir
+		x.Done = res.Done
+		x.Total = res.Total
+		x.Failed = len(res.Failed)
+		x.RefsKept = res.KeptReferences
+	})
 	return nil
 }
 
 // QueueAddPDF 入队 PDF 全流程任务（可一次传多个）。
 // 仅自动档收 PDF：翻译档跳过解析、导出档只出 PDF，均拒绝。
-func (a *App) QueueAddPDF(paths []string, mode string) ([]*Task, error) {
+func (a *App) QueueAddPDF(paths []string, mode string) ([]Task, error) {
 	if mode == "export" {
 		return nil, fmt.Errorf("导出模式仅支持 MD 文件")
 	}
@@ -254,7 +301,7 @@ func (a *App) QueueAddPDF(paths []string, mode string) ([]*Task, error) {
 		return nil, fmt.Errorf("翻译模式跳过解析，仅收 MD；PDF 请用自动档")
 	}
 	mode = "auto"
-	out := []*Task{}
+	out := []Task{}
 	for _, p := range paths {
 		t, err := a.queue.Add("pdf", p, mode)
 		if err != nil {
@@ -269,8 +316,8 @@ func (a *App) QueueAddPDF(paths []string, mode string) ([]*Task, error) {
 // QueueAddMD 入队 MD 任务，按模式与语言路由：
 // 翻译档 = 英文 MD 专线（中文拒收）；导出档 = MD 转 PDF 专线；
 // 自动档 = 中文导出 / 英文翻译。
-func (a *App) QueueAddMD(paths []string, mode string) ([]*Task, error) {
-	out := []*Task{}
+func (a *App) QueueAddMD(paths []string, mode string) ([]Task, error) {
+	out := []Task{}
 	for _, p := range paths {
 		kind := "md"
 		switch mode {
@@ -298,7 +345,7 @@ func (a *App) QueueAddMD(paths []string, mode string) ([]*Task, error) {
 }
 
 // QueueList 当前任务列表。
-func (a *App) QueueList() []*Task { return a.queue.List() }
+func (a *App) QueueList() []Task { return a.queue.List() }
 
 // Version 应用版本号（侧栏状态显示；唯一定义在 internal/version）。
 func (a *App) Version() string { return version.Version }
@@ -306,7 +353,7 @@ func (a *App) Version() string { return version.Version }
 // QueueState 队列运行状态（前端开始/暂停按钮的依据）。
 func (a *App) QueueState() map[string]any {
 	return map[string]any{
-		"running": a.queue.Current() != nil,
+		"running": a.queue.Running(),
 		"paused":  a.queue.IsPaused(),
 		"pending": a.queue.PendingCount(),
 	}
@@ -316,14 +363,14 @@ func (a *App) QueueState() map[string]any {
 func (a *App) QueueStart() {
 	a.queue.Start()
 	a.afterQueueChange()
-	runtime.EventsEmit(a.ctx, "log:line", a.pushLog("info", "队列已开始"))
+	a.logEmit("info", "队列已开始")
 }
 
 // QueuePause 暂停队列：正在跑的这篇完整跑完，之后不再开始下一篇。
 func (a *App) QueuePause() {
 	a.queue.Pause()
 	a.afterQueueChange()
-	runtime.EventsEmit(a.ctx, "log:line", a.pushLog("info", "队列已暂停：当前任务完成后停止"))
+	a.logEmit("info", "队列已暂停：当前任务完成后停止")
 }
 
 // QueueStartOne 只开始一个等待中的任务（提到队首，跑完即停，其余任务不动）。
@@ -332,12 +379,12 @@ func (a *App) QueueStartOne(id string) error {
 		return err
 	}
 	a.afterQueueChange()
-	runtime.EventsEmit(a.ctx, "log:line", a.pushLog("info", "已开始单个任务：跑完这一篇即暂停"))
+	a.logEmit("info", "已开始单个任务：跑完这一篇即暂停")
 	return nil
 }
 
 // QueueRetry 重试一个任务。
-func (a *App) QueueRetry(id string) (*Task, error) {
+func (a *App) QueueRetry(id string) (Task, error) {
 	t, err := a.queue.Retry(id)
 	if err == nil {
 		a.afterQueueChange()
@@ -355,7 +402,7 @@ func (a *App) QueueRemove(id string) error {
 }
 
 // QueueClearFinished 清掉已完成/失败的任务卡片。
-func (a *App) QueueClearFinished() []*Task {
+func (a *App) QueueClearFinished() []Task {
 	tasks := a.queue.ClearFinished()
 	a.afterQueueChange()
 	return tasks
@@ -373,17 +420,16 @@ func (a *App) afterQueueChange() {
 func (a *App) GetConfig() *config.Config { return a.cfg }
 
 // SaveConfig 用前端提交的配置原地更新并落盘（pipeline 共享指针，立即生效）。
-// 凭据与字体注册表由后端保留（前端表单不含密钥明文时也能安全保存）。
+// 凭据无条件采纳提交值：前端表单是唯一写入方且总是回传完整值
+// （collectSettings 提交 token/key），清空保存即删除凭据。
+// 字体注册表与已选字体由后端保留（前端表单不管理这两项）。
 func (a *App) SaveConfig(newCfg *config.Config) error {
 	if newCfg == nil {
 		return fmt.Errorf("配置为空")
 	}
-	token, key := a.cfg.MinerU.Token, a.cfg.LLM.APIKey
 	userFonts := a.cfg.UserFonts
 	userFontSel := a.cfg.Export.UserFont
 	*a.cfg = *newCfg
-	a.cfg.MinerU.Token = token
-	a.cfg.LLM.APIKey = key
 	a.cfg.UserFonts = userFonts
 	a.cfg.Export.UserFont = userFontSel
 	err := a.cfg.Save()
