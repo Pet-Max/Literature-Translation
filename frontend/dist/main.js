@@ -74,14 +74,15 @@ function bindTitlebar() {
 
 // ------------------------------------------------ 任务队列
 
-// 三种任务形态的步进器阶段表（按 kind 取用）
+// 三种任务形态的步进器阶段表（按 kind 取用）。pdf 的"校准"= 拼写校准，
+// 配置关闭或扫描件会跳过——该步会随后续阶段开始被标成 ✓（可接受的近似）。
 const STAGES_BY_KIND = {
-  pdf: ["解析", "翻译", "排版", "完成"],
+  pdf: ["解析", "校准", "翻译", "排版", "完成"],
   md: ["翻译", "排版", "完成"],
   export: ["排版", "完成"],
 };
 const STAGE_IDX_BY_KIND = {
-  pdf: { "解析中": 0, "翻译中": 1, "排版中": 2, "完成": 3 },
+  pdf: { "解析中": 0, "拼写校准": 1, "翻译中": 2, "排版中": 3, "完成": 4 },
   md: { "翻译中": 0, "排版中": 1, "完成": 2 },
   export: { "排版中": 0, "完成": 1 },
 };
@@ -107,7 +108,7 @@ function visibleStages(t) {
 function taskCard(t) {
   const code = fileCode(t.source_path);
   const fileName = t.source_path.split(/[\\/]/).pop();
-  const chipClass = { "解析中": "run", "翻译中": "run", "排版中": "run", "完成": "ok", "失败": "bad" }[t.status] || "";
+  const chipClass = { "解析中": "run", "拼写校准": "run", "翻译中": "run", "排版中": "run", "完成": "ok", "失败": "bad" }[t.status] || "";
 
   // 步进器：只渲染已到达的阶段，成功一步亮一步
   const vis = visibleStages(t);
@@ -132,15 +133,40 @@ function taskCard(t) {
 
   let progressHtml = "";
   if (t.status === "翻译中" && t.total > 0) {
-    const segs = Math.min(t.total, 30);
-    const filled = Math.round((t.done / t.total) * segs);
+    // 分桶渲染（段数无关）：≤60 段一段一格——绿=已完成、红=失败、灰=待翻；
+    // 更多段时聚合为 60 桶，桶内含失败→红、全完成→绿，其余灰。
+    // done_idx/failed_idx 由引擎进度事件携带；旧版引擎没有时退化为比例条。
+    const CAP = 60;
+    const cells = Math.min(t.total, CAP);
+    const hasIdx = Array.isArray(t.done_idx) || Array.isArray(t.failed_idx);
+    const doneSet = new Set(t.done_idx || []);
+    const failSet = new Set(t.failed_idx || []);
     let bars = "";
-    for (let i = 0; i < segs; i++) {
-      bars += `<i class="${i < filled ? "f" : i === filled ? "cur" : ""}"></i>`;
+    if (hasIdx && t.total <= CAP) {
+      for (let i = 0; i < t.total; i++) {
+        bars += `<i class="${failSet.has(i) ? "bad" : doneSet.has(i) ? "f" : ""}"></i>`;
+      }
+    } else if (hasIdx) {
+      const per = t.total / cells;
+      for (let c = 0; c < cells; c++) {
+        const lo = Math.floor(c * per);
+        const hi = Math.min(t.total, Math.floor((c + 1) * per));
+        let bad = false, allDone = hi > lo;
+        for (let i = lo; i < hi; i++) {
+          if (failSet.has(i)) bad = true;
+          else if (!doneSet.has(i)) allDone = false;
+        }
+        bars += `<i class="${bad ? "bad" : allDone ? "f" : ""}"></i>`;
+      }
+    } else {
+      const filled = Math.round((t.done / t.total) * cells);
+      for (let i = 0; i < cells; i++) {
+        bars += `<i class="${i < filled ? "f" : ""}"></i>`;
+      }
     }
     progressHtml = `
       <div class="segbar" aria-label="翻译进度">${bars}</div>
-      <div class="seg-cap"><span>第 ${t.done} / ${t.total} 段</span><span class="eta">失败 ${t.failed}</span></div>`;
+      <div class="seg-cap"><span>第 ${t.done} / ${t.total} 段</span><span class="eta">失败 ${t.failed}${t.sweeping ? " · 补翻中" : ""}</span></div>`;
   }
 
   // 状态相关的 meta 文案（信息，不做装饰）；kind 标注实际走的路径
@@ -151,9 +177,13 @@ function taskCard(t) {
   }[t.kind] || "英文 MD · 翻译+排版";
   let meta;
   if (t.status === "完成") {
-    meta = t.kind === "export" ? "排版完成" : `${t.done} 段译文` + (t.refs_kept > 0 ? ` · 参考文献 ${t.refs_kept} 条保留原文` : "");
+    const failPart = t.failed > 0 && t.kind !== "export" ? ` · ${t.failed} 段失败保留英文` : "";
+    meta = t.kind === "export" ? "排版完成" : `${t.done} 段译文${failPart}` + (t.refs_kept > 0 ? ` · 参考文献 ${t.refs_kept} 条保留原文` : "");
   } else if (t.status === "失败") {
-    meta = `${kindLabel} · 卡在「${stagesOf(t)[vis - 1]}」这一步`;
+    // 引擎未就绪/建归档失败/语言预检被拒发生在解析之前——别误标"卡在「解析」"
+    const started = t.done > 0 || t.total > 0 || stageIdxOf(t)[t.stage] !== undefined;
+    meta = started ? `${kindLabel} · 卡在「${stagesOf(t)[vis - 1]}」这一步`
+                   : `${kindLabel} · 未能开始（详见错误信息）`;
   } else {
     meta = `${kindLabel} · ${t.stage || t.status}`;
   }
@@ -183,7 +213,10 @@ function taskCard(t) {
     sideActions = `<div class="btn-rows"><button class="btn" data-retry="${t.id}">重新排队</button></div>`;
   }
   const failNote = t.status === "失败" && t.err
-    ? `<div class="fail-note">${esc(t.err.slice(0, 160))}</div>` : "";
+    ? `<div class="fail-note">${esc(t.err.slice(0, 240))}</div>` : "";
+  // 完成但有失败段：橙色提醒（区别于硬错误的红色），告知补翻路径
+  const sweepNote = t.status === "完成" && t.failed > 0 && t.kind !== "export"
+    ? `<div class="warn-note">有 ${t.failed} 段经多轮重试仍未通过校验，成品对应位置保留英文原文。点「重跑」补翻：已翻好的段走断点复用，只重翻失败段。</div>` : "";
   const enterCls = cardSeen[t.id] ? "" : " enter";
   cardSeen[t.id] = true;
   return `
@@ -198,6 +231,7 @@ function taskCard(t) {
       <div class="stepper">${stages}</div>
       ${progressHtml}
       ${failNote}
+      ${sweepNote}
     </div>
     <div class="task-side">
       <span class="status-chip ${chipClass}">${esc(t.status)}</span>
@@ -220,7 +254,7 @@ function renderQueue() {
     const toggle = $("btn-queue-toggle");
     if (st.running) {
       toggle.style.display = "";
-      toggle.textContent = "暂停";
+      toggle.textContent = st.paused ? "暂停中" : "暂停";
       toggle.className = "btn ghost-sm";
       toggle.title = st.paused ? "已暂停：当前任务完成后停止" : "当前任务完成后不再开始下一篇";
     } else if (st.pending > 0) {
@@ -248,7 +282,15 @@ function bindCardButtons() {
   document.querySelectorAll("[data-retry]").forEach((b) => {
     if (b.dataset.bound) return;
     b.dataset.bound = "1";
-    b.addEventListener("click", () => App.QueueRetry(b.dataset.retry).then(() => renderQueue()));
+    b.addEventListener("click", async () => {
+      try {
+        await App.QueueRetry(b.dataset.retry);
+        renderQueue();
+      } catch (e) {
+        // 运行中的任务后端会拒绝重排队——弹窗说明，不再静默无反应
+        await showModal({ icon: "warn", title: "无法重新排队", body: esc(String(e)) });
+      }
+    });
   });
   document.querySelectorAll("[data-remove]").forEach((b) => {
     if (b.dataset.bound) return;

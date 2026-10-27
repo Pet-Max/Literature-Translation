@@ -66,8 +66,14 @@ func usage() {
 func newPipeline(cfg *config.Config) (*pipeline.Pipeline, error) {
 	return pipeline.New(cfg, pipeline.Callbacks{
 		Log: cliLog,
-		Progress: func(done, total, failed int) {
-			fmt.Printf("\r[翻译] 进度 %d/%d 失败 %d   ", done, total, failed)
+		Progress: func(done, total, failed int, doneIdx, failedIdx []int, sweep bool) {
+			tag := ""
+			if sweep {
+				tag = "（补翻）"
+			}
+			fmt.Printf("\r[翻译%s] 进度 %d/%d 失败 %d   ", tag, done, total, failed)
+			// \r 行未换行：标记之，让下一条日志（含引擎转发的警告）先补 \n
+			progressPending = true
 		},
 		ParseState: func(state string) {
 			fmt.Printf("\r[解析] %-12s", state)

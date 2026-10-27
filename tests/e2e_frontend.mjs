@@ -67,7 +67,7 @@ console.log("\n[1] 初始渲染");
   ok("队列渲染 4 张任务卡", (await page.locator("#queue-list .task").count()) === 4);
   ok("任务计数文案", (await page.locator("#queue-count").textContent()) === "4 个任务");
   ok("默认模式=自动", await page.locator('.mode-btn[data-mode="auto"]').evaluate((el) => el.classList.contains("active")));
-  await until(() => page.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.2")));
+  await until(() => page.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.3")));
   ok("版本状态就绪", (await page.locator("#sidebar-status").textContent()).includes("就绪"));
 }
 
@@ -139,7 +139,7 @@ console.log("\n[3] 设置视图");
   await page.click("#btn-check-update");
   await until(() => page.locator("#update-result").evaluate((el) => !el.hidden));
   ok("检查更新结果=已是最新", (await page.locator("#update-result").textContent()).includes("已是最新"));
-  ok("当前版本行填充", (await page.locator("#about-version").textContent()).includes("v1.0.2"));
+  ok("当前版本行填充", (await page.locator("#about-version").textContent()).includes("v1.0.3"));
 }
 
 // ============ [4] 日志视图 ============
@@ -234,7 +234,7 @@ console.log("\n[8] FontList→null 回归");
   page2.on("pageerror", (e) => errors2.push(String(e)));
   await page2.goto(PAGE_URL + "?fontnull", { waitUntil: "load" });
   // 修复后 null 按空列表处理：应用照常走完初始化链，状态栏到达「就绪」
-  await until(() => page2.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.2")));
+  await until(() => page2.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.3")));
   const st2 = await page2.locator("#sidebar-status").textContent();
   ok("null 字体列表下状态就绪", st2.includes("就绪"), st2);
   ok("状态栏无「启动中/异常」残留", !st2.includes("启动中") && !st2.includes("异常"), st2);

@@ -136,7 +136,9 @@ func TestE2ETranslateMDArchive(t *testing.T) {
 			logs = append(logs, level+"|"+msg)
 			logMu.Unlock()
 		},
-		Progress: func(done, total, failed int) { lastDone = done },
+		Progress: func(done, total, failed int, doneIdx, failedIdx []int, sweep bool) {
+			lastDone = done
+		},
 		Stage:    func(string) {},
 	})
 	if err != nil {
@@ -356,7 +358,7 @@ func TestE2ECheckpointResume(t *testing.T) {
 
 	pl, err := pipeline.New(cfg, pipeline.Callbacks{
 		Log:      func(string, string) {},
-		Progress: func(int, int, int) {}, // 非 nil：持续抽干引擎事件通道
+		Progress: func(int, int, int, []int, []int, bool) {}, // 非 nil：持续抽干引擎事件通道
 		Stage:    func(string) {},
 	})
 	if err != nil {
@@ -378,8 +380,10 @@ func TestE2ECheckpointResume(t *testing.T) {
 	if res1.Total != 3 || res1.Done != 2 || len(res1.Failed) != 1 || res1.Failed[0].I != 1 {
 		t.Fatalf("首轮统计异常: total=%d done=%d failed=%+v", res1.Total, res1.Done, res1.Failed)
 	}
-	if n := mock.count(); n != 3 {
-		t.Errorf("首轮 mock 收到 %d 次请求，期望 3（每段恰好一次）", n)
+	// 首轮请求数 = 每段一次（3）+ 收尾补翻对失败段的重试（1）。
+	// mock 的 400 是确定性的，补翻救不回——正好验证补翻失败不改统计。
+	if n := mock.count(); n != 4 {
+		t.Errorf("首轮 mock 收到 %d 次请求，期望 4（每段一次 + 失败段收尾补翻一次）", n)
 	}
 	zh1, err := os.ReadFile(plan.ZhMDPath)
 	if err != nil {

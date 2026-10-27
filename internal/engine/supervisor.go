@@ -20,11 +20,16 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Event 是边车推送的进度事件。
+// Event 是边车推送的进度事件。DoneIdx/FailedIdx 为已完成/失败段的
+// 0 基编号（前端用于逐段着色）；Sweep 表示正处收尾补翻阶段
+// （旧版引擎不带这些字段，保持零值）。
 type Event struct {
-	Done   int `json:"done"`
-	Total  int `json:"total"`
-	Failed int `json:"failed"`
+	Done      int   `json:"done"`
+	Total     int   `json:"total"`
+	Failed    int   `json:"failed"`
+	DoneIdx   []int `json:"done_idx"`
+	FailedIdx []int `json:"failed_idx"`
+	Sweep     bool  `json:"sweep"`
 }
 
 type rpcLine struct {
@@ -34,10 +39,13 @@ type rpcLine struct {
 	Error  string          `json:"error"`
 	// 事件行是扁平的：{"event":"progress","done":12,"total":34,"failed":1}。
 	// event 用 string、计数用指针区分「未携带」与 0，整个行才能正确反序列化。
-	Event  string `json:"event"`
-	Done   *int   `json:"done"`
-	Total  *int   `json:"total"`
-	Failed *int   `json:"failed"`
+	Event     string `json:"event"`
+	Done      *int   `json:"done"`
+	Total     *int   `json:"total"`
+	Failed    *int   `json:"failed"`
+	DoneIdx   *[]int `json:"done_idx"`
+	FailedIdx *[]int `json:"failed_idx"`
+	Sweep     *bool  `json:"sweep"`
 }
 
 // Supervisor 持有一个边车进程实例。非线程安全的并发调用由内部
@@ -142,6 +150,15 @@ func (s *Supervisor) readLoop(r io.Reader) {
 			}
 			if line.Failed != nil {
 				ev.Failed = *line.Failed
+			}
+			if line.DoneIdx != nil {
+				ev.DoneIdx = *line.DoneIdx
+			}
+			if line.FailedIdx != nil {
+				ev.FailedIdx = *line.FailedIdx
+			}
+			if line.Sweep != nil {
+				ev.Sweep = *line.Sweep
 			}
 			select {
 			case s.Events <- ev:

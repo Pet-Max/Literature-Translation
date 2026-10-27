@@ -6,6 +6,7 @@
 package export
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/page"
@@ -22,6 +24,31 @@ import (
 
 	"literature-translation/internal/render"
 )
+
+// browserOutputBuf 收集无头浏览器的 stdout/stderr。chromedp 的 CombinedOutput
+// 会在独立 goroutine 里持续写入（浏览器存活期间不停止），必须加锁才能在
+// 错误处理路径安全读取。
+type browserOutputBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *browserOutputBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// Tail 取末尾至多 n 个 rune 的累积输出。
+func (b *browserOutputBuf) Tail(n int) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	r := []rune(strings.TrimSpace(b.buf.String()))
+	if len(r) > n {
+		return "…" + string(r[len(r)-n:])
+	}
+	return string(r)
+}
 
 // DebugLog 非空时输出导出过程诊断信息（CLI 注入 logf）。
 var DebugLog func(string)
@@ -93,11 +120,13 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 	}
 	defer os.RemoveAll(profileDir)
 
+	var browserOutput browserOutputBuf
 	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(edge),
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.UserDataDir(profileDir),
+		chromedp.CombinedOutput(&browserOutput),
 	)
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, allocOpts...)
 	defer cancelAlloc()
@@ -170,5 +199,17 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 			return nil
 		}),
 	)
+	if err != nil {
+		// 打印超时单独说明（避免漏出英文的 context deadline exceeded）
+		if errors.Is(err, context.DeadlineExceeded) {
+			return written, fmt.Errorf("PDF 打印超时（5 分钟）：文档较大或公式较多时可能发生，可重试")
+		}
+		// 启动类错误（chrome failed to start）已由 chromedp 自带浏览器输出；
+		// 其余错误（轮询超时、打印失败等）的浏览器输出本会被丢弃，这里补上，
+		// 否则 Edge 静默失败时无任何诊断线索
+		if out := browserOutput.Tail(400); out != "" && !strings.Contains(err.Error(), out) {
+			err = fmt.Errorf("%w\n浏览器输出: %s", err, out)
+		}
+	}
 	return written, err
 }

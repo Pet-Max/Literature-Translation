@@ -4,7 +4,8 @@
   请求   {"id": 1, "op": "translate", "payload": {...}}
   响应   {"id": 1, "ok": true, "result": {...}}
          {"id": 1, "ok": false, "error": "人话错误"}
-  事件   {"event": "progress", "done": 12, "total": 34, "failed": 1}
+  事件   {"event": "progress", "done": 12, "total": 34, "failed": 1,
+          "done_idx": [0,1,2], "failed_idx": [5]}
 
 支持的操作：
   ping                                   自检
@@ -25,6 +26,7 @@ import os
 import re
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -38,6 +40,9 @@ from translator import LLMClient, LLMError  # noqa: E402
 
 VERSION = "0.1.0"
 QUALITY_ATTEMPTS = 4  # 1 次初译 + 3 次质量重试
+SWEEP_ATTEMPTS = 2    # 收尾补翻时每段的重试次数
+SWEEP_PAUSE = 2       # 补翻前的错峰秒数：网络层已有指数退避自我节流，
+                      # 补翻又是串行低并发，等太久对确定性失败毫无收益
 
 _write_lock = threading.Lock()
 
@@ -158,40 +163,38 @@ def op_translate(payload: dict) -> dict:
     done_count = [0]
     failed: list[dict] = []
     results: dict[int, str] = {}
+    ok_set: set[int] = set()  # 已完成段（文献保留/断点复用/翻译成功）
 
-    def translate_one(i: int) -> None:
-        chunk = chunks[i]
-        if ref_flags[i]:
-            results[i] = chunk  # 文献条目：原文保留，不计费不进校验
-            return
-        if progress.reusable(i, chunk):
-            results[i] = progress.done[i][1]
-            return
-        frozen = freeze(chunk)
-        zh = _translate_with_retry(client, system, frozen.text, i)
-        if zh is None:
-            # 最终失败：保留原文占位，标记转人工
-            results[i] = chunk
-            return
-        zh = unfreeze(zh, frozen.mapping)
-        progress.record(i, chunk, zh)
+    def emit_progress(sweep: bool = False) -> None:
+        bad = {f["i"] for f in failed}
+        ev = {"event": "progress", "done": done_count[0], "total": total,
+              "failed": len(failed), "done_idx": sorted(ok_set - bad),
+              "failed_idx": sorted(bad)}
+        if sweep:
+            ev["sweep"] = True
+        emit(ev)
+
+    def accept_segment(i: int, frozen, zh_raw: str) -> None:
+        zh = unfreeze(zh_raw, frozen.mapping)
+        progress.record(i, chunks[i], zh)
         results[i] = zh
+        ok_set.add(i)
 
-    def _translate_with_retry(client: LLMClient, system: str,
-                              frozen_text: str, i: int) -> str | None:
-        user_msg = prompt_mod.build_user(frozen_text)
+    def attempt_segment(i: int, frozen, attempts: int) -> str | None:
+        """单段翻译 attempts 次（失败附纠正提示重试），仍不过则登记失败。"""
+        user_msg = prompt_mod.build_user(frozen.text)
         last_reasons: list[str] = []
         try:
-            for attempt in range(1, QUALITY_ATTEMPTS + 1):
+            for attempt in range(1, attempts + 1):
                 resp = client.complete(system, user_msg)
-                reasons = validator.validate(frozen_text, resp)
+                reasons = validator.validate(frozen.text, resp)
                 if not reasons:
                     if attempt > 1:
                         log(f"第 {i + 1} 段第 {attempt} 次尝试通过")
                     return resp
                 last_reasons = reasons
                 log(f"第 {i + 1} 段校验未过（第 {attempt} 次）：{'；'.join(reasons)}")
-                user_msg = prompt_mod.build_user(frozen_text) + \
+                user_msg = prompt_mod.build_user(frozen.text) + \
                     prompt_mod.build_correction(reasons)
         except LLMError as e:
             log(f"第 {i + 1} 段调用失败：{e}")
@@ -200,13 +203,52 @@ def op_translate(payload: dict) -> dict:
         failed.append({"i": i, "reasons": "；".join(last_reasons)})
         return None
 
+    def translate_one(i: int) -> None:
+        chunk = chunks[i]
+        if ref_flags[i]:
+            results[i] = chunk  # 文献条目：原文保留，不计费不进校验
+            ok_set.add(i)
+            return
+        if progress.reusable(i, chunk):
+            results[i] = progress.done[i][1]
+            ok_set.add(i)
+            return
+        frozen = freeze(chunk)
+        zh = attempt_segment(i, frozen, QUALITY_ATTEMPTS)
+        if zh is None:
+            # 最终失败：保留原文占位，标记转人工
+            results[i] = chunk
+            return
+        accept_segment(i, frozen, zh)
+
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = {pool.submit(translate_one, i): i for i in range(total)}
         for fut in as_completed(futures):
             fut.result()  # worker 内部已兜底，不会抛
             done_count[0] += 1
-            emit({"event": "progress", "done": done_count[0],
-                  "total": total, "failed": len(failed)})
+            emit_progress()
+
+    # 收尾补翻：全池跑完后对失败段集中再捞一轮——此时并发已归零，上游限流/
+    # 瞬时故障大多已恢复；成功段已在断点里，不受影响。
+    if failed:
+        log(f"收尾补翻：{len(failed)} 段未过，{SWEEP_PAUSE} 秒后集中重试")
+        time.sleep(SWEEP_PAUSE)
+        retry_idx = [f["i"] for f in failed]
+        failed.clear()  # attempt_segment 对仍失败的段会重新登记，避免重复条目
+        emit_progress(sweep=True)
+        for i in retry_idx:
+            frozen = freeze(chunks[i])
+            zh = attempt_segment(i, frozen, SWEEP_ATTEMPTS)
+            if zh is None:
+                continue
+            accept_segment(i, frozen, zh)
+            log(f"收尾补翻：第 {i + 1} 段已救回")
+            emit_progress(sweep=True)
+        if failed:
+            log(f"收尾补翻后仍有 {len(failed)} 段失败，保留英文原文待人工处理")
+        else:
+            log("收尾补翻：失败段全部救回")
+        emit_progress(sweep=True)
 
     client.close()
 

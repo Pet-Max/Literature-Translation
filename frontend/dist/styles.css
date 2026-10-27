@@ -209,11 +209,10 @@ body{
 .stp-line{width:22px;height:1.5px;background:var(--ink-3);opacity:.25}
 .stp.new{animation:stpIn .45s var(--spring-pop)}
 @keyframes stpIn{from{opacity:0;transform:translateX(-8px) scale(.8)}}
-.segbar{display:flex;gap:2px;margin:2px 0 4px}
-.segbar i{width:7px;height:5px;border-radius:2px;background:var(--surface-3)}
+.segbar{display:flex;gap:2px;margin:2px 0 4px;overflow:hidden}
+.segbar i{flex:1 1 0;max-width:7px;min-width:2px;height:5px;border-radius:2px;background:var(--surface-3)}
 .segbar i.f{background:var(--accent)}
-.segbar i.cur{background:var(--accent);animation:segPulse 1.2s ease-in-out infinite}
-@keyframes segPulse{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.7)}}
+.segbar i.bad{background:var(--bad)}
 .seg-cap{display:flex;justify-content:space-between;font-family:var(--f-mono);font-size:10px;color:var(--ink-3)}
 .seg-cap .eta{color:var(--warn)}
 .task-side{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:7px}
@@ -225,6 +224,11 @@ body{
 .fail-note{
   margin-top:8px;font-size:11px;line-height:1.7;color:var(--bad);
   background:var(--bad-tint);border-radius:8px;padding:7px 11px;
+}
+/* 完成但存在失败段：橙色提醒（区别于硬错误的红色），说明补翻路径 */
+.warn-note{
+  margin-top:8px;font-size:11px;line-height:1.7;color:var(--warn);
+  background:var(--warn-tint);border-radius:8px;padding:7px 11px;
 }
 .empty-hint{color:var(--ink-3);font-size:12.5px;padding:26px 2px}
 
@@ -454,7 +458,6 @@ select.in option{background:var(--panel);color:var(--ink)}
 :root[data-theme="light"] .stp.cur .dot{background:#0A84FF}
 :root[data-theme="light"] .stp.fail .dot{background:#FF453A}
 :root[data-theme="light"] .segbar i.f{background:#0A84FF}
-:root[data-theme="light"] .segbar i.cur{background:#0A84FF}
 :root[data-theme="light"] .lv-info{color:#0A6ED1}
 :root[data-theme="light"] .lv-warn{color:#B25000}
 :root[data-theme="light"] .lv-error{color:#C33}

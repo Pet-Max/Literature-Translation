@@ -31,6 +31,9 @@ type Task struct {
 	Done       int        `json:"done"`
 	Total      int        `json:"total"`
 	Failed     int        `json:"failed"`
+	DoneIdx    []int      `json:"done_idx"`   // 已完成段的 0 基编号（前端逐段着色）
+	FailedIdx  []int      `json:"failed_idx"` // 失败段的 0 基编号
+	Sweeping   bool       `json:"sweeping"`   // 正处收尾补翻阶段
 	RefsKept   int        `json:"refs_kept"`
 	OutPDF     string     `json:"out_pdf"`
 	ZHMD       string     `json:"zh_md"`
@@ -220,6 +223,7 @@ func (q *TaskQueue) Retry(id string) (*Task, error) {
 	t.Stage = "重新排队"
 	t.Err = ""
 	t.Done, t.Total, t.Failed = 0, 0, 0
+	t.DoneIdx, t.FailedIdx, t.Sweeping = nil, nil, false
 	q.mu.Unlock()
 	q.wake()
 	return t, nil

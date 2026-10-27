@@ -24,8 +24,9 @@ import (
 // LogFunc level: "info" | "warn" | "error" | "step"（step 表示阶段头）
 type LogFunc func(level, msg string)
 
-// ProgressFunc 翻译段进度。
-type ProgressFunc func(done, total, failed int)
+// ProgressFunc 翻译段进度。doneIdx/failedIdx 为已完成/失败段的 0 基编号
+// （供前端逐段着色）；sweep 表示正处收尾补翻阶段；旧引擎事件不含时为零值。
+type ProgressFunc func(done, total, failed int, doneIdx, failedIdx []int, sweep bool)
 
 // ParseStateFunc MinerU 解析状态回调（pending/running/done…）。
 type ParseStateFunc func(state string)
@@ -117,9 +118,24 @@ func (p *Pipeline) Check() error {
 	return nil
 }
 
-// startSupervisor 拉起 Python 翻译引擎。
+// startSupervisor 拉起 Python 翻译引擎。引擎 stderr（切段数、断点复用、
+// 校验未过原因、收尾补翻过程等诊断日志）按行转发到日志回调——此前传 nil
+// 全部丢弃，排障时无过程信息可看。
 func (p *Pipeline) startSupervisor() (*engine.Supervisor, error) {
-	return engine.Start(p.EngineDir, nil)
+	return engine.Start(p.EngineDir, stderrForwarder{p})
+}
+
+// stderrForwarder 把引擎 stderr 按行转发到日志（exec 对 stderr 单 goroutine
+// 拷贝，Write 串行到达，无需加锁；引擎侧 PYTHONUNBUFFERED=1 保证整行写入）。
+type stderrForwarder struct{ p *Pipeline }
+
+func (f stderrForwarder) Write(b []byte) (int, error) {
+	for _, line := range strings.Split(strings.TrimRight(string(b), "\r\n"), "\n") {
+		if strings.TrimSpace(line) != "" {
+			f.p.warnf("%s", line)
+		}
+	}
+	return len(b), nil
 }
 
 // RunPDF 全流程：MinerU 解析 → 拼写校准 → 翻译 → 导出。
@@ -375,7 +391,7 @@ func (p *Pipeline) pumpProgress(sup *engine.Supervisor) {
 		return
 	}
 	for ev := range sup.Events {
-		p.CB.Progress(ev.Done, ev.Total, ev.Failed)
+		p.CB.Progress(ev.Done, ev.Total, ev.Failed, ev.DoneIdx, ev.FailedIdx, ev.Sweep)
 	}
 }
 
@@ -437,7 +453,7 @@ func (p *Pipeline) export(t zhTarget, outPDF string, useTOC, useTwo bool) (strin
 	cfg := p.Cfg
 	mdBytes, err := os.ReadFile(t.MDPath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("读取译文 Markdown 失败: %w", err)
 	}
 	htmlDoc := render.Build(string(mdBytes), render.Options{
 		Title:       t.Title,
@@ -450,7 +466,22 @@ func (p *Pipeline) export(t zhTarget, outPDF string, useTOC, useTwo bool) (strin
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	fontsDir, _ := fonts.Dir()
-	finalPath, err := export.PrintPDF(ctx, t.Dir, htmlDoc, outPDF, fontsDir)
+	// 浏览器启动类故障（Edge 后台更新换版、被安全软件瞬时拦截、内存吃紧等）
+	// 过几秒重开一次通常就能恢复，自动重试；KaTeX/打印/写盘类错误是确定性的，
+	// 不重试，避免白等。打印本身幂等，重试零风险。
+	var finalPath string
+	for attempt := 1; ; attempt++ {
+		finalPath, err = export.PrintPDF(ctx, t.Dir, htmlDoc, outPDF, fontsDir)
+		if err == nil || attempt >= 3 || !isBrowserLaunchErr(err) {
+			break
+		}
+		p.logf("浏览器未起来（第 %d 次）：%v —— 5 秒后重试", attempt, err)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
 	if err != nil {
 		return "", err
 	}
@@ -459,6 +490,15 @@ func (p *Pipeline) export(t zhTarget, outPDF string, useTOC, useTwo bool) (strin
 		p.warnf("原目标文件被占用（可能正被阅读器打开），已另存为新文件")
 	}
 	return finalPath, nil
+}
+
+// isBrowserLaunchErr 识别无头浏览器启动阶段的瞬时故障：进程未及打印
+// DevTools 端点就退出（chrome failed to start），或 20 秒内没等到端点
+// （websocket url timeout reached）。文案来自 chromedp，升级其版本时需留意。
+func isBrowserLaunchErr(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "chrome failed to start") ||
+		strings.Contains(msg, "websocket url timeout reached")
 }
 
 func glossaryPairs(cfg *config.Config) [][]string {

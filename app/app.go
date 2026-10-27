@@ -92,9 +92,10 @@ func (a *App) newPipeline() (*pipeline.Pipeline, error) {
 			line := a.pushLog(level, msg)
 			runtime.EventsEmit(a.ctx, "log:line", line)
 		},
-		Progress: func(done, total, failed int) {
+		Progress: func(done, total, failed int, doneIdx, failedIdx []int, sweep bool) {
 			if t := a.queue.Current(); t != nil {
 				t.Done, t.Total, t.Failed = done, total, failed
+				t.DoneIdx, t.FailedIdx, t.Sweeping = doneIdx, failedIdx, sweep
 				if t.Status != StatusDone && t.Status != StatusFailed {
 					t.Status = StatusTranslating
 				}
@@ -103,13 +104,24 @@ func (a *App) newPipeline() (*pipeline.Pipeline, error) {
 		},
 		ParseState: func(state string) {
 			if t := a.queue.Current(); t != nil {
-				t.Stage = "解析中（" + state + "）"
+				// MinerU 原始状态词翻译成人话，未知值原样透传
+				name := map[string]string{
+					"pending": "排队中", "running": "解析中", "done": "已完成", "failed": "失败",
+				}[state]
+				if name == "" {
+					name = state
+				}
+				t.Stage = "解析中（" + name + "）"
 				a.emitTask(t)
 			}
 		},
 		Stage: func(stage string) {
 			if t := a.queue.Current(); t != nil {
 				t.Status = TaskStatus(stage)
+				// 同步 Stage：失败时前端按 Stage 定位失败步骤，
+				// 不同步的话会一直停在解析期写入的"解析中（…）"，
+				// 失败卡片永远误标为卡在「解析」
+				t.Stage = stage
 				a.emitTask(t)
 			}
 		},
@@ -175,6 +187,7 @@ func (a *App) runTask(t *Task) error {
 	}
 	t.Status = StatusPending
 	t.Err = ""
+	t.DoneIdx, t.FailedIdx, t.Sweeping = nil, nil, false
 	a.emitTask(t)
 
 	// 归档方案：每篇文献在归档根下建独立档案夹（四类产物 + _process）
