@@ -6,6 +6,8 @@ const _bs = String.fromCharCode(92);
 const EMPTY = new URLSearchParams(location.search).has("empty");
 // ?fontnull：FontList 返回 null（Go nil 切片的 JSON 形态），回归 v1.0.1 修复
 const FONTNULL = new URLSearchParams(location.search).has("fontnull");
+// ?updatefail：CheckUpdate 抛错（reject），覆盖检查更新失败路径
+const UPDATEFAIL = new URLSearchParams(location.search).has("updatefail");
 
 const MOCK_TASKS = [
   {
@@ -96,8 +98,10 @@ window.go = { app: { App: {
   TestLLM: async () => 15,
   TestMinerU: async () => "Token 有效",
   GetConfig: async () => MOCK_CFG,
-  Version: async () => "v1.0.4",
-  CheckUpdate: async () => ({ has_update: false, current: "v1.0.4", latest: "v1.0.4", url: "", notes: "" }),
+  Version: async () => "v1.0.5",
+  CheckUpdate: async () => UPDATEFAIL
+    ? Promise.reject("无法连接 GitHub（检查网络后重试）: Get \"https://api.github.com/repos/Pet-Max/Literature-Translation/releases/latest\": dial tcp 203.0.113.9:443: i/o timeout")
+    : { has_update: false, current: "v1.0.5", latest: "v1.0.5", url: "" },
   SaveConfig: async () => true,
   IronRules: async () => MOCK_IRON,
   PickFiles: async () => [],

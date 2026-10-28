@@ -98,15 +98,15 @@
         <h3>服务连接</h3>
         <div class="card-hint">MinerU 解析与翻译模型凭据 · <a class="mini-link" id="mineru-link" href="https://mineru.net/apiManage/token">前往 API 管理 ↗</a></div>
         <div class="fgrid">
-          <label>API Token</label><div class="conn-wrap"><input class="in mono" type="password" id="cfg-mineru-token"><button class="conn-dot idle" data-conn="mineru" title="测试连接" aria-label="测试 MinerU 连接">⇄</button></div>
+          <label>API Token</label><div class="conn-wrap"><input class="in mono" type="password" id="cfg-mineru-token" placeholder="mineru.net「API 管理」页生成"><button class="conn-dot idle" data-conn="mineru" title="测试连接" aria-label="测试 MinerU 连接">⇄</button></div>
           <label>解析模式</label><div><select class="in" id="cfg-mineru-mode" style="max-width:260px">
             <option value="vlm">精准解析（VLM，公式表格更准）</option>
             <option value="pipeline">快速解析（pipeline，文本层优先）</option>
           </select></div>
-          <label>接口地址</label><div class="conn-wrap"><input class="in mono" id="cfg-llm-url"><button class="conn-dot idle" data-conn="llm" title="测试连接" aria-label="测试 LLM 连接">⇄</button></div>
-          <label>API Key</label><input class="in mono" type="password" id="cfg-llm-key">
+          <label>模型 API 地址</label><div class="conn-wrap"><input class="in mono" id="cfg-llm-url" placeholder="https://api.deepseek.com"><button class="conn-dot idle" data-conn="llm" title="测试连接" aria-label="测试 LLM 连接">⇄</button></div>
+          <label>API Key</label><input class="in mono" type="password" id="cfg-llm-key" placeholder="sk-...">
           <label>模型名</label><div class="inline-btns" style="position:relative">
-            <input class="in mono" id="cfg-llm-model" style="max-width:230px" placeholder="glm-4.6">
+            <input class="in mono" id="cfg-llm-model" style="max-width:230px" placeholder="deepseek-flash">
             <button class="btn" id="btn-fetch-models" title="从上游接口拉取可用模型列表">拉取模型</button>
             <div class="model-pop" id="model-pop" hidden></div>
           </div>
@@ -176,8 +176,9 @@
         <h3>关于与更新</h3>
         <div class="card-hint">手动检查 GitHub 最新版本；更新请前往 Release 页下载安装包，应用内不做自动更新</div>
         <div class="about-row">
-          <span class="about-ver" id="about-version">当前版本 —</span>
-          <button class="btn ghost-sm" id="btn-check-update">检查更新</button>
+          <span class="about-ver"><span class="about-ver-label">当前版本</span><span class="about-ver-num" id="about-version">—</span></span>
+          <span class="about-status" id="about-status" aria-live="polite" hidden></span>
+          <button class="btn" id="btn-check-update">检查更新</button>
           <a class="mini-link" id="release-link" href="https://github.com/Pet-Max/Literature-Translation/releases/latest">打开 Release 页 ↗</a>
         </div>
         <div class="card-hint update-result" id="update-result" hidden></div>

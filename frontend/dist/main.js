@@ -1000,21 +1000,43 @@ function bindConnTests() {
 function bindCheckUpdate() {
   const btn = $("btn-check-update");
   const out = $("update-result");
+  const status = $("about-status");
+  let releaseUrl = "";
+  // 短状态行内展示（紧跟版本号）；「有新版本」可点击直达 Release 页
+  status.addEventListener("click", () => {
+    if (status.classList.contains("new") && releaseUrl) rt.BrowserOpenURL(releaseUrl);
+  });
   btn.addEventListener("click", async () => {
     if (btn.disabled) return;
     btn.disabled = true;
     btn.textContent = "检查中…";
+    status.hidden = true;
+    out.hidden = true; // 清掉上一轮可能残留的失败提示（失败→成功切换场景）
     try {
       const info = await App.CheckUpdate();
-      out.hidden = false;
-      out.innerHTML = info.has_update
-        ? `🆕 发现新版本 <b>${esc(info.latest)}</b>（当前 ${esc(info.current)}）——前往 Release 页下载${info.notes ? `<br>${esc(info.notes)}` : ""}`
-        : `✓ 已是最新（${esc(info.latest || info.current)}）`;
-      localLog("info", info.has_update ? `发现新版本 ${info.latest}` : "已是最新版本");
+      releaseUrl = info.url || "";
+      if (info.has_update) {
+        // 有新版本：仅行内短状态（可点击直达 Release 页），无独立结果行
+        status.className = "about-status new";
+        status.hidden = false;
+        status.textContent = `🆕 有新版本 ${info.latest}`;
+        localLog("info", `发现新版本 ${info.latest}`);
+      } else {
+        // 已是最新：一行短状态收尾
+        status.className = "about-status ok";
+        status.hidden = false;
+        status.textContent = "✓ 已是最新";
+        localLog("info", "已是最新版本");
+      }
     } catch (e) {
+      const raw = String(e);
+      // 界面只显示用户可读的前缀（如「无法连接 GitHub（检查网络后重试）」）；
+      // 约定：带细节的报错以「）: 」分隔可读部分与原始信息，完整细节进日志便于排查
+      const sep = raw.indexOf("）: ");
+      status.hidden = true;
       out.hidden = false;
-      out.textContent = "检查失败：" + e;
-      localLog("warn", "检查更新失败：" + e);
+      out.textContent = "检查失败：" + (sep >= 0 ? raw.slice(0, sep + 1) : raw);
+      localLog("warn", "检查更新失败：" + raw);
     } finally {
       btn.disabled = false;
       btn.textContent = "检查更新";
@@ -1158,7 +1180,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     // 版本号单一来源：Go 侧 internal/version 经绑定给出；壳缺失时退化为 ?
     let VER = "?";
     try { VER = await App.Version(); } catch (e) { /* 无绑定时显示 ? */ }
-    $("about-version").textContent = "当前版本 " + VER;
+    $("about-version").textContent = VER;
     // DOM 方式写入（不拼 innerHTML）：内容即使将来来源变化也不构成注入面
     const fontsOk = CFG.mineru?.token && CFG.llm?.api_key;
     const sb = $("sidebar-status");

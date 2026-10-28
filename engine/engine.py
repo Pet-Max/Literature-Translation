@@ -3,7 +3,7 @@
 协议（每行一个 JSON 对象，UTF-8）：
   请求   {"id": 1, "op": "translate", "payload": {...}}
   响应   {"id": 1, "ok": true, "result": {...}}
-         {"id": 1, "ok": false, "error": "人话错误"}
+         {"id": 1, "ok": false, "error": "可读的错误文本"}
   事件   {"event": "progress", "done": 12, "total": 34, "failed": 1,
           "done_idx": [0,1,2], "failed_idx": [5]}
 

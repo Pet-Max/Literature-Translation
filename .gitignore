@@ -36,3 +36,7 @@ Desktop.ini
 .DS_Store
 .idea/
 .vscode/
+
+# ============ Windows 保留名坑：>nul 重定向在特殊环境会落地成真实文件 ============
+nul
+nul/

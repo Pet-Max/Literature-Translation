@@ -14,7 +14,7 @@ import httpx
 
 
 class LLMError(Exception):
-    """调用失败（人话消息，可直接进日志/界面）。"""
+    """调用失败（可读文本，可直接进日志/界面）。"""
 
 
 class LLMClient:
@@ -54,12 +54,12 @@ class LLMClient:
                     try:
                         data = resp.json()
                     except ValueError as err:
-                        # 200 但 body 非 JSON：多为接口地址配错（如打到了网页）
+                        # 200 但 body 非 JSON：多为模型 API 地址配错（如打到了网页）
                         raise LLMError(
-                            f"返回了非 JSON 内容（检查接口地址是否正确）: {resp.text[:120]}") from err
+                            f"返回了非 JSON 内容（检查模型 API 地址是否正确）: {resp.text[:120]}") from err
                     if not isinstance(data, dict):
                         # 合法 JSON 但非对象（如顶层数组）：后续 .get 会抛
-                        # AttributeError 穿透重试层，这里显式报成人话
+                        # AttributeError 穿透重试层，这里显式转为可读文本
                         raise LLMError(
                             f"返回了非预期格式（应为 JSON 对象）: {str(data)[:120]}")
                     content = (data.get("choices") or [{}])[0] \

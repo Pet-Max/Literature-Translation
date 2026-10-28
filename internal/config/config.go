@@ -28,7 +28,7 @@ type MinerU struct {
 type LLM struct {
 	BaseURL     string `json:"base_url"` // 如 https://open.bigmodel.cn/api/paas/v4
 	APIKey      string `json:"api_key"`
-	Model       string `json:"model"`       // 如 glm-4.6
+	Model       string `json:"model"`       // 如 deepseek-flash
 	Concurrency int    `json:"concurrency"` // 并发段数，默认 3
 }
 
@@ -395,14 +395,14 @@ func (c *Config) Normalize() {
 	}
 }
 
-// ValidateAndReport 返回人话的缺失项列表（用于启动自检）。
+// ValidateAndReport 返回可直接展示给用户的缺失项列表（用于启动自检）。
 func (c *Config) ValidateAndReport() []string {
 	var missing []string
 	if strings.TrimSpace(c.MinerU.Token) == "" {
-		missing = append(missing, "MinerU Token 未配置（设置 → 解析服务）")
+		missing = append(missing, "MinerU Token 未配置（设置 → 服务连接）")
 	}
 	if strings.TrimSpace(c.LLM.BaseURL) == "" || strings.TrimSpace(c.LLM.APIKey) == "" || strings.TrimSpace(c.LLM.Model) == "" {
-		missing = append(missing, "翻译模型接口地址 / API Key / 模型名未配置完整（设置 → 翻译模型）")
+		missing = append(missing, "模型 API 地址 / API Key / 模型名未配置完整（设置 → 服务连接）")
 	}
 	return missing
 }

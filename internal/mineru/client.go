@@ -56,7 +56,7 @@ type apiResp struct {
 	Success *bool `json:"success"`
 }
 
-// friendlyCode 把 MinerU 错误码翻译成人话。响应形态有两种：
+// friendlyCode 把 MinerU 错误码翻译为可读文本。响应形态有两种：
 // 认证类 {"msgCode":"A0202","msg":"...","success":false} 与
 // 业务类 {"code":-60018,"msg":"..."}，都覆盖。
 func friendlyCode(r apiResp) error {

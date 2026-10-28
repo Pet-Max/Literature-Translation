@@ -67,7 +67,7 @@ console.log("\n[1] 初始渲染");
   ok("队列渲染 4 张任务卡", (await page.locator("#queue-list .task").count()) === 4);
   ok("任务计数文案", (await page.locator("#queue-count").textContent()) === "4 个任务");
   ok("默认模式=自动", await page.locator('.mode-btn[data-mode="auto"]').evaluate((el) => el.classList.contains("active")));
-  await until(() => page.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.4")));
+  await until(() => page.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.5")));
   ok("版本状态就绪", (await page.locator("#sidebar-status").textContent()).includes("就绪"));
 }
 
@@ -137,9 +137,10 @@ console.log("\n[3] 设置视图");
   // 关于与更新卡
   ok("关于与更新卡按钮", await page.locator("#btn-check-update").isVisible());
   await page.click("#btn-check-update");
-  await until(() => page.locator("#update-result").evaluate((el) => !el.hidden));
-  ok("检查更新结果=已是最新", (await page.locator("#update-result").textContent()).includes("已是最新"));
-  ok("当前版本行填充", (await page.locator("#about-version").textContent()).includes("v1.0.4"));
+  await until(() => page.locator("#about-status").evaluate((el) => !el.hidden));
+  ok("检查更新行内状态=已是最新", (await page.locator("#about-status").textContent()).includes("已是最新"));
+  ok("已是最新时无独立结果行", await page.locator("#update-result").isHidden());
+  ok("当前版本行填充", (await page.locator("#about-version").textContent()).includes("v1.0.5"));
 }
 
 // ============ [4] 日志视图 ============
@@ -234,7 +235,7 @@ console.log("\n[8] FontList→null 回归");
   page2.on("pageerror", (e) => errors2.push(String(e)));
   await page2.goto(PAGE_URL + "?fontnull", { waitUntil: "load" });
   // 修复后 null 按空列表处理：应用照常走完初始化链，状态栏到达「就绪」
-  await until(() => page2.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.4")));
+  await until(() => page2.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.5")));
   const st2 = await page2.locator("#sidebar-status").textContent();
   ok("null 字体列表下状态就绪", st2.includes("就绪"), st2);
   ok("状态栏无「启动中/异常」残留", !st2.includes("启动中") && !st2.includes("异常"), st2);
@@ -242,6 +243,41 @@ console.log("\n[8] FontList→null 回归");
   ok("术语表仍渲染", (await page2.locator("#glossary-box .g-row:not(.head)").count()) === 1);
   ok("null 页无 JS 运行时错误", errors2.length === 0, errors2.join(" | "));
   await page2.close();
+}
+
+// ============ [9] 检查更新失败路径（?updatefail：CheckUpdate reject） ============
+console.log("\n[9] 检查更新失败路径");
+{
+  const page3 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  await page3.addInitScript(() => { try { localStorage.clear(); } catch {} });
+  await page3.goto(PAGE_URL + "?updatefail", { waitUntil: "load" });
+  await until(() => page3.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.5")));
+  await page3.click('.nav-item[data-view="settings"]');
+  await until(() => page3.locator("#view-settings").evaluate((el) => el.classList.contains("active")));
+  await page3.click("#btn-check-update");
+  await until(() => page3.locator("#update-result").evaluate((el) => !el.hidden));
+  ok("失败时行内状态不出现", await page3.locator("#about-status").isHidden());
+  const errText = await page3.locator("#update-result").textContent();
+  ok("失败提示只含可读前缀（无 IP/URL 细节）", errText.includes("无法连接 GitHub") && !errText.includes("dial tcp") && !errText.includes("https://"), errText.trim());
+  // 失败→成功切换：换到正常壳页面点击成功后，上一轮残留的错误行必须消失
+  const page4 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  await page4.addInitScript(() => { try { localStorage.clear(); } catch {} });
+  await page4.goto(PAGE_URL, { waitUntil: "load" });
+  await until(() => page4.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.5")));
+  await page4.click('.nav-item[data-view="settings"]');
+  await until(() => page4.locator("#view-settings").evaluate((el) => el.classList.contains("active")));
+  // 先人为暴露一个"上轮失败残留"，再点成功，验证 stale 清理
+  await page4.evaluate(() => {
+    const out = document.querySelector("#update-result");
+    out.hidden = false;
+    out.textContent = "检查失败：无法连接 GitHub（检查网络后重试）";
+  });
+  await page4.click("#btn-check-update");
+  await until(() => page4.locator("#about-status").evaluate((el) => !el.hidden));
+  ok("失败→成功后错误行被清除", await page4.locator("#update-result").isHidden());
+  ok("成功后行内状态=已是最新", (await page4.locator("#about-status").textContent()).includes("已是最新"));
+  await page3.close();
+  await page4.close();
 }
 
 // ------------------------------------------------ 收尾

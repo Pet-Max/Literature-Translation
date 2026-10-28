@@ -109,7 +109,7 @@ func (a *App) newPipeline() (*pipeline.Pipeline, error) {
 			})
 		},
 		ParseState: func(state string) {
-			// MinerU 原始状态词翻译成人话，未知值原样透传
+			// MinerU 原始状态词翻译为可读中文，未知值原样透传
 			name := map[string]string{
 				"pending": "排队中", "running": "解析中", "done": "已完成", "failed": "失败",
 			}[state]
@@ -534,7 +534,7 @@ func (a *App) SetFontPreset(preset, userFont string) error {
 func (a *App) FetchModels() ([]string, error) {
 	base := strings.TrimRight(strings.TrimSpace(a.cfg.LLM.BaseURL), "/")
 	if base == "" || strings.TrimSpace(a.cfg.LLM.APIKey) == "" {
-		return nil, fmt.Errorf("请先填写接口地址与 API Key")
+		return nil, fmt.Errorf("请先填写模型 API 地址与 API Key")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -598,7 +598,6 @@ type UpdateInfo struct {
 	Current   string `json:"current"`
 	Latest    string `json:"latest"`
 	URL       string `json:"url"`
-	Notes     string `json:"notes"` // 更新说明首段摘要
 }
 
 // CheckUpdate 查询 GitHub 最新 Release 并与当前版本比较。手动触发：
@@ -622,7 +621,6 @@ func (a *App) CheckUpdate() (*UpdateInfo, error) {
 	var rel struct {
 		TagName string `json:"tag_name"`
 		HTMLURL string `json:"html_url"`
-		Body    string `json:"body"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rel); err != nil || rel.TagName == "" {
 		return nil, fmt.Errorf("响应解析失败")
@@ -631,7 +629,6 @@ func (a *App) CheckUpdate() (*UpdateInfo, error) {
 		Current: version.Version,
 		Latest:  strings.TrimSpace(rel.TagName),
 		URL:     rel.HTMLURL,
-		Notes:   summarizeNotes(rel.Body),
 	}
 	info.HasUpdate = compareSemver(info.Latest, info.Current) > 0
 	return info, nil
@@ -656,30 +653,6 @@ func compareSemver(a, b string) int {
 		}
 	}
 	return 0
-}
-
-// summarizeNotes 提取更新说明的首段摘要：跳过标题行与空行，剥掉
-// markdown 加粗与反引号，超长按 rune 截断。
-func summarizeNotes(body string) string {
-	var out []string
-	for _, ln := range strings.Split(body, "\n") {
-		ln = strings.TrimSpace(ln)
-		if ln == "" || strings.HasPrefix(ln, "#") || strings.HasPrefix(ln, "<") {
-			if len(out) > 0 {
-				break
-			}
-			continue
-		}
-		out = append(out, strings.TrimPrefix(ln, "- "))
-		if len(out) >= 2 {
-			break
-		}
-	}
-	s := strings.NewReplacer("**", "", "`", "").Replace(strings.Join(out, " "))
-	if r := []rune(s); len(r) > 160 {
-		s = string(r[:160]) + "…"
-	}
-	return s
 }
 
 // TestLLM 测试翻译模型接口连通性：复用 /models 拉取，返回可用模型数。
