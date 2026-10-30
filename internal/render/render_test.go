@@ -72,3 +72,20 @@ func TestUnsafeHTMLescaped(t *testing.T) {
 func MarkdownToHTMLForTest(md string) string {
 	return markdownToHTML(md)
 }
+
+func TestNestedFreezeRestore(t *testing.T) {
+	// 代码围栏夹在 $$…$$ 之间：含占位符的匹配不再冻结成"公式"，
+	// 围栏按代码块还原，$$ 落为普通文本，不得出现 ⟦M⟧ 字面量泄漏
+	// （repair/render 两处同源 bug，V4 全库验证泄漏 862 处）
+	md := "before\n\n$$\n```\nfenced $$ inner\n```\n$$\n\nafter"
+	out := Build(md, Options{Title: "T"})
+	if strings.Contains(out, "⟦M") || strings.Contains(out, "[M1]") {
+		t.Errorf("占位符泄漏: %q", out)
+	}
+	if !strings.Contains(out, "<pre><code>fenced $$ inner</code></pre>") {
+		t.Errorf("代码块丢失: %q", out)
+	}
+	if strings.Contains(out, `data-tex`) {
+		t.Errorf("夹住围栏的 $$ 不应变成公式: %q", out)
+	}
+}

@@ -23,7 +23,7 @@ Literature Translation 是一个**英文学术文献翻译桌面应用**。拖�
 
 ```
 拖入文件 → 语言自动路由
-  ├─ 英文 PDF  → MinerU 云端精准解析 → 拼写校准 → LLM 翻译 → KaTeX 排版 → 中文 PDF
+  ├─ 英文 PDF  → MinerU 云端精准解析 → 解析校准 → LLM 翻译 → KaTeX 排版 → 中文 PDF
   ├─ 英文 MD   → LLM 翻译 → KaTeX 排版 → 中文 PDF
   ├─ 中文 MD   → 直接排版导出（换字体 / 开目录重出 PDF）
   └─ 中文 PDF  → 秒拒（不烧配额）
@@ -33,9 +33,9 @@ Literature Translation 是一个**英文学术文献翻译桌面应用**。拖�
 
 ```
 Literature Library/
-└── L001_Full counting statistics…/
+└── Full…/
     ├── 01_en_pdf/    原始 PDF
-    ├── 02_en_md/     MinerU 解析 + 拼写校准后的英文 MD（含图片）
+    ├── 02_en_md/     MinerU 解析 + 解析校准后的英文 MD（含图片）
     ├── 03_zh_md/     中文译文 MD（含图片，双击可看）
     ├── 04_zh_pdf/    最终排版成品
     └── _process/         断点缓存 · MinerU 原始解包 · 来源路径
@@ -44,7 +44,8 @@ Literature Library/
 ## 主要功能
 
 - **智能路由**：自动按文件语言分流——英文 PDF 走完整流程、英文 MD 直接翻译、中文 MD 仅导出；中文 PDF 在解析前即被拦截，不浪费云端配额
-- **公式零损伤**：翻译时用占位符冻结公式（⟦F1⟧），机械校验 $ 配对 / 占位符完整，不合格自动重试；排版用 KaTeX 逐公式渲染，粗体向量 `\boldsymbol` 自动归一
+- **解析校准**：以原 PDF 文本层为参照，自动修复 MinerU 解析损伤——拼写连字（ef ects→effects）、数学符号（|00i→|00⟩、公式补箭头）、重音符（H¨anggi→Hänggi）、控制码还原（乱码→Λ），以及损伤后恰为合法词的错误（over→offer，词表法无法察觉）；HTML 表格自动转为 Markdown 表格（支持跨行跨列），随译文完整保留。拼写与符号修复在设置里独立开关，已有文献库可离线重跑校准，不消耗配额
+- **公式零损伤**：翻译时用占位符冻结公式（⟦F1⟧），机械校验 $ 配对 / 占位符完整，不合格自动重试；排版用 KaTeX 逐公式渲染，粗体向量 `\boldsymbol` 自动归一；超宽公式自动缩放适配版面
 - **多套翻译规则**：预设可编辑、可切换、可重命名，「生效中」徽标实时标注；改名即时落盘，正文编辑有未保存提醒
 - **术语表**：原文术语 → 统一译名，附在每段翻译指令中，LLM 严格遵循
 - **断点续跑**：每段译文即时落盘，中断后重跑自动跳过已完成段；规则 / 术语 / 模型变更自动使旧缓存失效
@@ -117,7 +118,7 @@ build.bat
 
 ## 常见问题
 
-- **双击 exe 弹出 SmartScreen 警告？** 应用暂未做代码签名（开源项目常见状态），点「更多信息 → 仍要运行」即可。
+- **双击 exe 弹出 SmartScreen 警告？** 应用暂未做代码签名，点「更多信息 → 仍要运行」即可。
 - **提示找不到 Microsoft Edge？** 导出 PDF 依赖系统 Edge（Win10/11 内置）。若系统被精简过，安装 Edge 即可，无需任何配置。
 - **启动提示 Python 相关错误？** 翻译引擎需要 Python 3.10+ 与依赖（`pip install pymupdf httpx`）；也可用环境变量 `LITERATURE_PYTHON` 指定解释器路径。
 - **MinerU 报 Token 无效 / A0202？** 到 [mineru.net「API 管理」](https://mineru.net/apiManage/token)重新生成 Token，回设置页粘贴后点输入框右侧 ⇄ 重测。
@@ -131,7 +132,7 @@ build.bat
 │  任务队列 · 设置 · 日志 · 主题              │
 ├───────────────────────────────────────────┤
 │  Go 管线层 (internal/pipeline)             │
-│  MinerU 解析 · 拼写校准 · 归档 · 渲染导出   │
+│  MinerU 解析 · 解析校准 · 归档 · 渲染导出   │
 ├───────────────────────────────────────────┤
 │  Python 引擎 (engine/)                     │
 │  公式冻结 · 分段翻译 · 断点缓存 · 校验重试  │
@@ -145,7 +146,7 @@ build.bat
 - 翻译内容仅经过你配置的 LLM 接口和 MinerU 云端，本工具自身不收集任何数据
 - 断点缓存只含源段哈希与译文，不含 API Key
 
-## 开发者指南
+## 开发指南
 
 ```
 main.go        GUI 入口（Wails v2，go:embed 前端资源）
@@ -157,6 +158,19 @@ engine/        Python 翻译边车（stdio JSON-RPC：切段→冻结→翻译�
 frontend/dist/ 前端三件套，即源码、零构建（embed 进主程序）
 tests/         管线 E2E、前端 E2E、overlay 服务器、gui_shim 模拟壳
 build/         图标源与打包产物（bin/ 不入库）
+```
+
+### 命令行（CLI）
+
+GUI 之外提供同能力的命令行（与 GUI 共用 internal/pipeline 管线）：
+
+```bash
+literature-translation check                       # 预检配置与环境
+literature-translation run paper.pdf               # 全流程：解析 → 校准 → 翻译 → 导出
+literature-translation translate doc.md            # 翻译已有 MD 并导出（跳过解析）
+literature-translation print doc.md                # 仅排版导出 PDF（不翻译）
+literature-translation calibrate doc.md paper.pdf  # 离线重跑解析校准（改写 MD，自动留 .bak）
+literature-translation font add|list|use|remove    # 字体管理
 ```
 
 ### 本地开发
@@ -213,7 +227,7 @@ npm i --no-save playwright-core
 node tests/e2e_frontend.mjs
 ```
 
-覆盖：语言检测表驱动、路由矩阵（模式 × 文件类型 × 语言）、归档方案（命名/冲突/截断/复用/非法名）、字体校验、公式渲染冻结/解冻、拼写修复；管线层补齐「翻译 → 校验 → 回填 → 排版 → 打印 → 归档」全链路、断点缓存指纹与续跑；模糊测试守住语言检测与归档命名；前端层覆盖界面交互与主题令牌。
+覆盖：语言检测表驱动、路由矩阵（模式 × 文件类型 × 语言）、归档方案（命名/冲突/截断/复用/非法名）、字体校验、公式渲染冻结/解冻、解析校准（符号 / 表格转换 / 上下文锚定 / 重音符）；管线层补齐「翻译 → 校验 → 回填 → 排版 → 打印 → 归档」全链路、断点缓存指纹与续跑；模糊测试守住语言检测与归档命名；前端层覆盖界面交互与主题令牌。
 
 ### 欢迎 PR
 

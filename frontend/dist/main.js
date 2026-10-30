@@ -452,6 +452,7 @@ async function loadSettings() {
   $("cfg-twocolumn").checked = !!CFG.export?.two_column;
   $("cfg-skiprefs").checked = CFG.translate?.skip_references !== false;
   $("cfg-repair").checked = CFG.repair?.spelling !== false;
+  $("cfg-repair-symbols").checked = CFG.repair?.symbols !== false;
   $("cfg-outdir").value = CFG.export?.output_dir || "";
   DEFAULT_RULES_TEXT = await App.IronRules();
   await loadFontSection();
@@ -822,6 +823,7 @@ function collectSettings() {
   c.export.two_column = $("cfg-twocolumn").checked;
   c.translate.skip_references = $("cfg-skiprefs").checked;
   c.repair.spelling = $("cfg-repair").checked;
+  c.repair.symbols = $("cfg-repair-symbols").checked;
   c.export.output_dir = $("cfg-outdir").value;
   // 字体下拉的变更即时经 SetFontPreset 落盘并刷新 CFG，这里随深拷贝带上
   c.export.font_preset = CFG.export?.font_preset || "lxgw";

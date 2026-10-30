@@ -32,15 +32,17 @@ type LLM struct {
 	Concurrency int    `json:"concurrency"` // 并发段数，默认 3
 }
 
-// DefaultRules 系统默认翻译规则（与 engine/prompt.py 的 IRON_RULES 保持一致）。
+// DefaultRules 系统默认翻译规则（与 engine/prompt.py 的 IRON_RULES 保持一致，
+// 一致性由 config_test 的 TestDefaultRulesMatchesPython 锁定）。
 // 作为「默认」预设的初始文案，也是「恢复默认」按钮的还原源。
 const DefaultRules = "你是一名物理学/学术文献翻译引擎。把用户消息中的 Markdown 学术文本翻译成简体中文，严格遵守：\n\n" +
-	"1. 只翻译自然语言文字；⟦F1⟧、⟦F2⟧ 这类 ⟦F数字⟧ 占位符（代表公式、代码、图片、表格）必须原样保留：一个不能少、一个不能改、位置不能移动，也不要试图翻译或解读占位符内容。\n" +
+	"1. 只翻译自然语言文字；⟦F1⟧、⟦F2⟧ 这类 ⟦F数字⟧ 占位符（代表公式、代码、图片）必须原样保留：一个不能少、一个不能改、位置不能移动，也不要试图翻译或解读占位符内容。\n" +
 	"2. Eq. (5)、Fig. 3、Table 1、Ref. [12]、arXiv:2306.00417、附录编号 S IV 等引用编号保留原样，不要翻译 Eq./Fig. 等标记。\n" +
-	"3. Markdown 结构保持不变：标题层级（# 数量）、列表、引用块、加粗斜体、链接与原文一一对应；标题译文务必简短。\n" +
-	"4. 专有名词、人名、变量名（如 PSD、Langevin、Sz(ω) 中的记号）按学界惯例处理：有通用中译的用中译，没有的保留原文。\n" +
-	"5. 术语严格按术语表统一译名。\n" +
-	"6. 只输出译文本身。不要任何解释、前言、结语、代码围栏包裹。"
+	"3. Markdown 结构保持不变：标题层级（# 数量）、列表、引用块、加粗斜体、链接、表格与原文一一对应；标题译文务必简短。表格逐行保持竖线 | 与列数不变，只翻译单元格内的文字，单元格内的占位符原样保留。\n" +
+	"4. 物理记号原样保留：狄拉克记号（|00⟩、⟨01|）、希腊字母（Λ、Ω、ψ）、上下标变量，以及无法识别的乱码字符——一律不翻译、不删除、不猜测含义、不改写。\n" +
+	"5. 专有名词、人名按学界惯例处理：有通用中译的用中译（如 Langevin→朗之万），没有的保留原文。\n" +
+	"6. 术语严格按下方术语表统一译名。\n" +
+	"7. 只输出译文本身。不要任何解释、前言、结语、代码围栏包裹。"
 
 // RulePreset 一套可切换的翻译规则预设（正文为发给模型的完整规则）。
 type RulePreset struct {
@@ -89,6 +91,7 @@ type Export struct {
 // Repair 解析后处理选项。
 type Repair struct {
 	Spelling bool `json:"spelling"` // 用原 PDF 词表校准 OCR 拼写损伤（推荐开启）
+	Symbols  bool `json:"symbols"`  // 修复 |00⟩、公式箭头等符号级损伤（推荐开启）
 }
 
 // Translate 翻译策略。
@@ -196,7 +199,7 @@ func Default() *Config {
 			// 中西文配对：西文/数字/希腊字母统一 Times，中文落霞鹜文楷
 			Font: `"Times New Roman", "LXGW WenKai", "Microsoft YaHei", serif`,
 		},
-		Repair:    Repair{Spelling: true},
+		Repair:    Repair{Spelling: true, Symbols: true},
 		Translate: Translate{SkipReferences: true},
 		// 空切片而非 nil：nil 经 JSON 序列化成 null，前端拿到会崩
 		UserFonts: []UserFont{},

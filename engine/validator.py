@@ -17,6 +17,21 @@ DOLLAR_RE = re.compile(r"\$\$|(?<!\\)\$")
 BEGIN_END_RE = re.compile(r"\\(begin|end)\{([^}]+)\}")
 
 
+def _table_pipes(text: str) -> list[int]:
+    """按出现顺序收集管道表格行的竖线数。
+
+    只计同时以 | 开头且以 | 结尾的行：物理文献正文/公式常以狄拉克记号
+    打头（|00⟩、|p⟩ = …，本库实测 57 行），只看行首会把它们当成表格行，
+    模型重排换行后就误报"表格结构被改动"——真表格行必然首尾都有竖线。
+    """
+    out: list[int] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("|") and s.endswith("|"):
+            out.append(s.count("|"))
+    return out
+
+
 def validate(src: str, dst: str) -> list[str]:
     """冻结态对比原文/译文，返回问题列表（空 = 通过）。"""
     reasons: list[str] = []
@@ -35,6 +50,17 @@ def validate(src: str, dst: str) -> list[str]:
     dst_heads = HEADING_RE.findall(dst)
     if len(src_heads) != len(dst_heads):
         reasons.append(f"标题数不一致（原文 {len(src_heads)}，译文 {len(dst_heads)}）")
+
+    # 表格结构：管道表格的逐行竖线数必须与原文一致（规则 3：
+    # 只译单元格文字）。模型多写/少写一个 | 整张表渲染就废，且
+    # 占位符校验查不到——表格不是占位符，是可译文本。
+    src_pipes = _table_pipes(src)
+    dst_pipes = _table_pipes(dst)
+    if src_pipes != dst_pipes:
+        reasons.append(
+            f"表格结构被改动（原文 {len(src_pipes)} 行竖线数 {src_pipes[:6]}，"
+            f"译文 {len(dst_pipes)} 行 {dst_pipes[:6]}），逐行保持 | 与列数不变"
+        )
 
     # 译文异常短（占位符除外几乎没内容）大概率是拒答/半途而废
     def _visible(t: str) -> int:

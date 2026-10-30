@@ -118,6 +118,9 @@ func markdownToHTML(md string) string {
 	freezeMap := map[string]string{}
 	n := 0
 	add := func(s string) string {
+		if strings.Contains(s, "⟦M") {
+			return s // 已含占位符（嵌套匹配），不冻结
+		}
 		n++
 		key := fmt.Sprintf("⟦M%d⟧", n)
 		freezeMap[key] = s
@@ -126,7 +129,9 @@ func markdownToHTML(md string) string {
 
 	// \$ 不是定界符，临时替换避免干扰匹配
 	text := escDollar.Replace(md)
-	// 冻结顺序：围栏代码 → 行间公式 → 行内公式（先长后短）
+	// 冻结顺序：围栏代码 → 行间公式 → 行内公式（先长后短）。
+	// 已含占位符的匹配不再冻结（如 $$…$$ 夹住代码围栏时，那不是公式，
+	// 嵌套冻结曾让回填顺序错乱、占位符以字面量泄漏进正文）
 	text = fenceRe.ReplaceAllStringFunc(text, add)
 	text = dispRe.ReplaceAllStringFunc(text, add)
 	text = regexp.MustCompile(`\$[^$\n]+?\$`).ReplaceAllStringFunc(text, add)
@@ -147,28 +152,51 @@ func markdownToHTML(md string) string {
 
 	// 回填：数学套 KaTeX 定界符（HTML 转义后由浏览器解码）；
 	// 代码块还原为 pre/code。span+display:block 保证可出现在 <p> 内。
-	return phRe.ReplaceAllStringFunc(out, func(key string) string {
+	// 按键号从大到小逐个恢复：后冻结的是外层，先还原外层后，其内容里
+	// 嵌套的内层键才会被后续轮次处理（goldmark 输出里嵌套键只是普通
+	// 文本，ReplaceAllStringFunc 不会递归，乱序/单轮恢复会把内层键
+	// 以 ⟦M⟧ 字面量留在正文——repair 包 V4 验证中 862 处泄漏同因）。
+	for {
+		loc := phRe.FindStringIndex(out)
+		if loc == nil {
+			break
+		}
+		key := out[loc[0]:loc[1]]
 		raw, ok := freezeMap[key]
 		if !ok {
-			return key
+			// 不在表中的占位符（正文恰好出现 ⟦M⟧ 文本）：去掉特殊定界符
+			// 改成普通文本，绕开再次匹配（防死循环）
+			out = out[:loc[0]] + "[M" + key[3:len(key)-1] + "]" + out[loc[1]:]
+			continue
 		}
-		if strings.HasPrefix(raw, "```") || strings.HasPrefix(raw, "~~~") {
-			langAndCode := strings.TrimPrefix(strings.TrimPrefix(raw, "```"), "~~~")
-			nl := strings.IndexByte(langAndCode, '\n')
-			code := langAndCode
-			if nl >= 0 {
-				code = langAndCode[nl+1:]
-			}
-			return "<pre><code>" + html.EscapeString(strings.TrimSuffix(code, "\n")) + "</code></pre>"
+		out = out[:loc[0]] + restoreMath(key, raw) + out[loc[1]:]
+	}
+	return out
+}
+
+// restoreMath 把单个冻结区段还原为 HTML（代码块或 KaTeX 占位 span）。
+func restoreMath(key, raw string) string {
+	if strings.HasPrefix(raw, "```") || strings.HasPrefix(raw, "~~~") {
+		langAndCode := strings.TrimPrefix(strings.TrimPrefix(raw, "```"), "~~~")
+		nl := strings.IndexByte(langAndCode, '\n')
+		code := langAndCode
+		if nl >= 0 {
+			code = langAndCode[nl+1:]
 		}
-		if strings.HasPrefix(raw, "$$") {
-			tex := strings.TrimSuffix(strings.TrimPrefix(raw, "$$"), "$$")
-			return `<span class="ktx-disp" data-tex="` + html.EscapeString(nestedMathDelimRe.ReplaceAllString(boldCmdRe.ReplaceAllString(tex, `\boldsymbol`), "")) + `"></span>`
+		// fenceRe 的匹配包含闭合围栏行，剥掉（否则代码块末尾显示 ```）
+		for _, closer := range []string{"\n```", "\n~~~", "```", "~~~"} {
+			code = strings.TrimSuffix(code, closer)
+			code = strings.TrimRight(code, " \t")
 		}
-		tex := strings.TrimPrefix(raw, "$")
-		tex = strings.TrimSuffix(tex, "$")
-		return `<span class="ktx" data-tex="` + html.EscapeString(nestedMathDelimRe.ReplaceAllString(boldCmdRe.ReplaceAllString(tex, `\boldsymbol`), "")) + `"></span>`
-	})
+		return "<pre><code>" + html.EscapeString(strings.TrimSuffix(code, "\n")) + "</code></pre>"
+	}
+	if strings.HasPrefix(raw, "$$") {
+		tex := strings.TrimSuffix(strings.TrimPrefix(raw, "$$"), "$$")
+		return `<span class="ktx-disp" data-tex="` + html.EscapeString(nestedMathDelimRe.ReplaceAllString(boldCmdRe.ReplaceAllString(tex, `\boldsymbol`), "")) + `"></span>`
+	}
+	tex := strings.TrimPrefix(raw, "$")
+	tex = strings.TrimSuffix(tex, "$")
+	return `<span class="ktx" data-tex="` + html.EscapeString(nestedMathDelimRe.ReplaceAllString(boldCmdRe.ReplaceAllString(tex, `\boldsymbol`), "")) + `"></span>`
 }
 
 var headingRe = regexp.MustCompile(`<h([1-3]) id="([^"]*)"[^>]*>(.*?)</h[1-3]>`)
@@ -225,7 +253,9 @@ body {
 .toc li.lv3 { padding-left:2.6em; font-size:.95em; color:var(--ink2); }
 .toc a { color:inherit; text-decoration:none; }
 .toc a:hover { color:var(--teal); text-decoration:underline; }
-.content { max-width:46em; margin:0 auto; }
+/* 44em ≈ A4 去页边距后的可排宽度（6.87in×96dpi/15px），屏幕与打印同宽，
+   公式的宽度自适应结果在 printToPDF 重排版后依然成立 */
+.content { max-width:44em; margin:0 auto; }
 h1, h2, h3, h4, h5, h6 { line-height:1.35; margin:1.5em 0 .55em; }
 h1, h2, h3, h4, h5, h6, strong, b { font-weight:700; }
 .doc-title { font-weight:700; }

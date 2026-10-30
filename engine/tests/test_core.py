@@ -260,3 +260,37 @@ class TestProgressReload(unittest.TestCase):
             self.assertTrue(pr2.reusable(0, "chunk-source"))
             # 源段内容变化（校准后）→ 不得复用
             self.assertFalse(pr2.reusable(0, "chunk-source-changed"))
+
+
+class TestTableStructureValidation(unittest.TestCase):
+    def test_table_intact_passes(self):
+        # 冻结态：单元格公式已是占位符，两侧竖线结构一致
+        src = "表：\n\n| Model | ⟦F1⟧ |\n| --- | --- |\n| A | 1 |\n"
+        dst = "表：\n\n| 模型 | ⟦F1⟧ |\n| --- | --- |\n| A | 1 |\n"
+        self.assertEqual(validator.validate(src, dst), [])
+
+    def test_broken_column_fails(self):
+        src = "| Model | ⟦F1⟧ |\n| --- | --- |\n| A | 1 |"
+        dst = "| 模型 | ⟦F1⟧ |\n| --- | --- |\n| A | 1 缺竖线"
+        reasons = validator.validate(src, dst)
+        self.assertTrue(any("表格结构" in r for r in reasons))
+
+    def test_row_count_change_fails(self):
+        src = "| A | 1 |\n| B | 2 |"
+        dst = "| A | 1 |"
+        reasons = validator.validate(src, dst)
+        self.assertTrue(any("表格结构" in r for r in reasons))
+
+    def test_leading_ket_prose_not_table(self):
+        # 行首狄拉克记号不是表格行（本库实测 57 行 |p⟩ = … 形态）；
+        # 模型重排换行让 |00⟩ 落到行首也不得误报
+        src = "态 |00⟩ 与 |01⟩ 构成基。"
+        dst = "|00⟩ 与 |01⟩ 构成基。"
+        self.assertEqual(validator.validate(src, dst), [])
+
+    def test_table_with_ket_cells_still_checked(self):
+        # 表格单元格里含狄拉克记号时仍须正常校验
+        src = "| 态 | 值 |\n| --- | --- |\n| |00⟩ | 1 |"
+        dst = "| 态 | 值 |\n| --- | --- |\n| |00⟩ |"
+        reasons = validator.validate(src, dst)
+        self.assertTrue(any("表格结构" in r for r in reasons))

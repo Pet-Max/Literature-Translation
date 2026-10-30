@@ -130,23 +130,68 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "$env:TAG"
-          # 固定模板自动发布；--generate-notes 追加 GitHub 自动段——合并 PR 后出现
-          # What's Changed / New Contributors，无 PR 时只追加 Full Changelog。
-          # 若组合参数在 CI 异常，去掉 --generate-notes 即回退为纯固定模板。
-          $notes = @"
-          ## 📦 Literature Translation $tag
-
-          ### 📦 分发
-          - 💿 **安装版** Literature-Translation-Setup-$tag-windows-amd64.exe：向导式安装、自定义目录、开始菜单与卸载器
-          - 🎒 **便携版** Literature-Translation-$tag-windows-amd64-portable.zip：解压即用，程序 + 翻译引擎 + 便携 Python 运行时自包含
-          - 🧰 两者均内置翻译引擎与全部依赖，无需自行安装 Python
-          - 🔍 校验：checksums.txt（SHA-256，可用 Get-FileHash / sha256sum 对照）
-
-          ### ⚠️ 已知事项
-          - 🛡️ 未做代码签名：首次运行可能遇到 SmartScreen 提示（「更多信息 → 仍要运行」）
-          - 🪟 仅支持 Windows 10 / 11；PDF 打印依赖系统自带 Microsoft Edge
-          "@
+          $owner = ($env:GITHUB_REPOSITORY -split '/')[0]
+          # 发布页三段式：更新日志（全部 commit + 短哈希）→ What's Changed /
+          # New Contributors（仅当有合并 PR）→ Full Changelog。
+          # 不用 --generate-notes：个人仓库不走 PR，其 PR 段永远为空。
+          # 一次 API 调用同时取「首行标题 + 短哈希」：commit 消息按行输出
+          # 会被拍平，PR 提取只对首行做，避免把 commit 正文里的 "(#N)"
+          # 引用误认为合并的 PR。短哈希与 tag 区间在 Release 页由 GitHub
+          # 自动渲染为链接。
+          $prev = gh api "repos/$env:GITHUB_REPOSITORY/releases" --jq '.[0].tag_name' 2>$null
+          if ($prev) {
+            $rows = gh api "repos/$env:GITHUB_REPOSITORY/compare/$prev...$tag" --jq '.commits[] | (.commit.message | split("\n")[0]) + "\t" + .sha[0:7]'
+          } else {
+            # 首个发布：无对比基准，取 tag 历史上的提交
+            $rows = gh api "repos/$env:GITHUB_REPOSITORY/commits?sha=$tag&per_page=50" --jq '.[] | (.commit.message | split("\n")[0]) + "\t" + .sha[0:7]'
+          }
+          # 更新日志行 + PR 提取（squash 形态 "(#12)" 与 merge 提交形态
+          # "Merge pull request #12" 都覆盖；PR 号 → 首行标题的映射供
+          # pulls 接口 404（(#N) 实为 issue 引用）时兜底
+          $commits = @()
+          $prTitles = @{}
+          foreach ($r in $rows) {
+            $p = $r -split "`t", 2
+            $commits += "* " + $p[0] + " (" + $p[1] + ")"
+            if ($p[0] -match '\(#(\d+)\)\s*$' -or $p[0] -match '^Merge pull request #(\d+) from') {
+              $prTitles[[int]$Matches[1]] = $p[0]
+            }
+          }
+          $prNums = @($prTitles.Keys | Sort-Object)
+          $notes = "## 更新日志`n`n" + ($commits -join "`n") + "`n"
+          if ($prNums.Count -gt 0) {
+            # 有 PR：What's Changed 列 PR（标题+作者+短链）；New Contributors
+            # 列仓库所有者之外的 PR 作者——个人仓库阶段外部作者即新贡献者，
+            # 常客出现后可在发布页手动校正措辞
+            $lines = @()
+            $newC = @()
+            $userPr = @{}
+            foreach ($n in $prNums) {
+              $info = gh api "repos/$env:GITHUB_REPOSITORY/pulls/$n" --jq '.title + "\t" + .user.login' 2>$null
+              if ($info) {
+                $title, $user = $info -split "`t", 2
+                $lines += "* $title by @$user in #$n"
+                if ($user -and $user -ne $owner -and -not $userPr.ContainsKey($user)) {
+                  $userPr[$user] = $n
+                  $newC += $user
+                }
+              } else {
+                # (#N) 引用的是 issue 而非 PR：按 commit 标题列出，不加 PR 链接
+                $lines += "* $($prTitles[$n])"
+              }
+            }
+            $notes += "`n## What's Changed`n`n" + ($lines -join "`n") + "`n"
+            if ($newC.Count -gt 0) {
+              $notes += "`n## New Contributors`n`n"
+              foreach ($u in $newC) {
+                $notes += "* @$u made their first contribution in #$($userPr[$u])`n"
+              }
+              $notes += "`n"
+            }
+          }
+          $changelog = if ($prev) { "$prev...$tag" } else { "$env:GITHUB_REPOSITORY/commits/$tag" }
+          $notes += "`n**Full Changelog**: $changelog"
           $notesFile = "$env:RUNNER_TEMP/release-notes.md"
           Set-Content -Path $notesFile -Value $notes -Encoding utf8NoBOM
-          gh release create $tag --title $tag --notes-file $notesFile --generate-notes --verify-tag
+          gh release create $tag --title $tag --notes-file $notesFile --verify-tag
           gh release upload $tag "build/bin/Literature-Translation-$tag-windows-$env:ARCH-portable.zip" "build/bin/Literature-Translation-Setup-$tag-windows-$env:ARCH.exe" "build/bin/checksums.txt" --clobber

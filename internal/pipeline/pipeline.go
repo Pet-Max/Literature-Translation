@@ -185,14 +185,19 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 	}
 	defer sup.Stop()
 
-	// [0/4] 语言预检：本地抽文本层判定，中文 PDF 直接拒绝（不烧 MinerU 配额）
+	// [0/4] 语言预检：本地抽文本层判定，中文 PDF 直接拒绝（不烧 MinerU 配额）。
+	// 抽到的文本层留给 [1.5] 拼写校准复用，避免同一 PDF 抽两遍。
+	var srcText string
 	if raw, err := sup.Call(ctx, "pdf_text", map[string]any{"pdf_path": pdfPath}, 2*time.Minute); err == nil {
 		var pt struct {
 			Text string `json:"text"`
 		}
-		if json.Unmarshal(raw, &pt) == nil && IsChineseText(pt.Text) {
-			p.warnf("语言预检：中文 PDF，无需翻译流程")
-			return nil, fmt.Errorf("检测到中文 PDF，无需翻译。")
+		if json.Unmarshal(raw, &pt) == nil {
+			srcText = pt.Text
+			if IsChineseText(pt.Text) {
+				p.warnf("语言预检：中文 PDF，无需翻译流程")
+				return nil, fmt.Errorf("检测到中文 PDF，无需翻译。")
+			}
 		}
 	}
 	// 预检失败（无文本层/引擎异常）不拦路，走正常流程
@@ -212,25 +217,36 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 	}
 	p.logf("解析完成，用时 %s：%s", time.Since(start).Round(time.Second), res.MDPath)
 
-	// [1.5/4] 拼写校准
-	if cfg.Repair.Spelling {
-		raw, err := sup.Call(ctx, "pdf_text", map[string]any{"pdf_path": pdfPath}, 2*time.Minute)
+	// [1.5/4] 校准（复用预检抽取的文本层；预检未取到时再抽一次）。
+	// 符号修复与词级拼写校准是两个独立开关，全关则连文本层都不必抽
+	if cfg.Repair.Spelling || cfg.Repair.Symbols {
 		p.stage("拼写校准")
-		if err != nil {
-			p.warnf("文本抽取失败，跳过拼写校准：%v", err)
-		} else {
-			var pt struct {
-				Text string `json:"text"`
-			}
-			if err := json.Unmarshal(raw, &pt); err == nil && strings.TrimSpace(pt.Text) != "" {
-				st, err := repair.Apply(res.MDPath, pt.Text)
-				if err != nil {
-					p.warnf("拼写校准失败（继续用未校准文本）：%v", err)
-				} else {
-					p.logf("拼写校准：修正 %d 处，合并 %d，拆分 %d", st.Fixed, st.Merged, st.Split)
+		if strings.TrimSpace(srcText) == "" {
+			if raw, err := sup.Call(ctx, "pdf_text", map[string]any{"pdf_path": pdfPath}, 2*time.Minute); err == nil {
+				var pt struct {
+					Text string `json:"text"`
+				}
+				if json.Unmarshal(raw, &pt) == nil {
+					srcText = pt.Text
 				}
 			}
 		}
+		if strings.TrimSpace(srcText) == "" {
+			p.warnf("文本抽取失败，跳过拼写校准")
+		} else {
+			st, err := repair.Apply(res.MDPath, srcText, repair.Options{
+				Spelling: cfg.Repair.Spelling,
+				Symbols:  cfg.Repair.Symbols,
+			})
+			if err != nil {
+				p.warnf("拼写校准失败（继续用未校准文本）：%v", err)
+			} else {
+				p.logf("拼写校准：修正 %d，合并 %d，拆分 %d，符号 %d，上下文 %d，表格 %d，重音符 %d，控制码 %d，行间公式 %d",
+					st.Fixed, st.Merged, st.Split, st.Syms, st.Ctx, st.Tables, st.Accents, st.Ctrl, st.Display)
+			}
+		}
+	} else {
+		p.logf("拼写校准与符号修复均已关闭，跳过")
 	}
 
 	// [2/4] 翻译
@@ -275,6 +291,46 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 		Total: tr.Total, Done: tr.Done, KeptReferences: tr.KeptReferences,
 		Failed: tr.Failed, Warnings: tr.Warnings,
 	}, nil
+}
+
+// Recalibrate 对已解析的英文 MD 离线重跑校准（不烧 MinerU 配额）：
+// 取原 PDF 文本层 → repair.Apply 原地改写（改写前备份 <名>.md.bak）。
+// 供存量文档在新版校准规则下重新加工，也用于人工抽查修复明细。
+// 显式的修复命令，始终跑全量（符号 + 词级），不受 repair 配置开关限制。
+func (p *Pipeline) Recalibrate(ctx context.Context, mdPath, pdfPath string) (*repair.Stats, error) {
+	sup, err := p.startSupervisor()
+	if err != nil {
+		return nil, err
+	}
+	defer sup.Stop()
+
+	raw, err := sup.Call(ctx, "pdf_text", map[string]any{"pdf_path": pdfPath}, 2*time.Minute)
+	if err != nil {
+		return nil, fmt.Errorf("文本抽取失败: %w", err)
+	}
+	var pt struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &pt); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(pt.Text) == "" {
+		return nil, fmt.Errorf("PDF 文本层为空（扫描件无法校准）")
+	}
+	// 备份只保留首次：二次运行若覆盖 .bak，第一次的原件就丢了
+	bakPath := mdPath + ".bak"
+	if _, err := os.Stat(bakPath); os.IsNotExist(err) {
+		if bak, err := os.ReadFile(mdPath); err == nil {
+			if err := os.WriteFile(bakPath, bak, 0o644); err != nil {
+				p.warnf("备份失败（继续校准，无备份）：%v", err)
+			}
+		}
+	}
+	st, err := repair.Apply(mdPath, pt.Text, repair.Options{Spelling: true, Symbols: true})
+	if err != nil {
+		return nil, err
+	}
+	return &st, nil
 }
 
 // TranslateMD 翻译已有 MD（跳过解析；无原 PDF 时拼写校准自动跳过）。

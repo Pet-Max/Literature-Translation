@@ -60,7 +60,9 @@ body{
 }
 .win-controls button:hover{background:var(--hover-2)}
 .win-controls button:active{transform:scale(.94)}
-.theme-btn svg{width:14px;height:14px;color:var(--ink-2)}
+/* 主题按钮图标：块级 + margin auto 显式居中——月亮默认行内可吃按钮的
+   text-align:center，太阳被 display:block 后会靠左（浅色主题偏左 bug） */
+.theme-btn svg{width:14px;height:14px;display:block;margin:0 auto;color:var(--ink-2)}
 .theme-btn .ic-sun{display:none}
 :root[data-theme="light"] .theme-btn .ic-sun{display:block}
 :root[data-theme="light"] .theme-btn .ic-moon{display:none}

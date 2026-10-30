@@ -100,6 +100,14 @@ def op_ping(payload: dict) -> dict:
     return {"pong": True, "version": VERSION, "python": sys.version.split()[0]}
 
 
+# LaTeX CM 字体的连字码点：PyMuPDF 文本层里 "effects" 常以 ﬀ (U+FB00) 出现，
+# 按 ASCII 字母分词会把词切成 "e"+"ects" 毒化校准词表，先还原为普通字母序列。
+_LIGATURES = str.maketrans({
+    "\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl",
+    "\ufb03": "ffi", "\ufb04": "ffl", "\ufb05": "st", "\ufb06": "st",
+})
+
+
 def op_pdf_text(payload: dict) -> dict:
     """抽取 PDF 文本层（PyMuPDF）。用于拼写校准：原文本层是干净参照。"""
     p = payload.get("pdf_path")
@@ -114,6 +122,9 @@ def op_pdf_text(payload: dict) -> dict:
         text = "\n".join(page.get_text() for page in doc)
     finally:
         doc.close()
+    # 连字码点还原；CM 字体还会把 ≠ 映射为"组合删除符+等号"，一并归一
+    text = text.translate(_LIGATURES)
+    text = text.replace("\u0338=", "\u2260")
     return {"text": text}
 
 
