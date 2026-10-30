@@ -27,6 +27,9 @@ func TestDefaultRulesMatchesPython(t *testing.T) {
 		t.Fatal("IRON_RULES 未闭合")
 	}
 	pyRules := rest[:j]
+	// 检出换行随平台（.gitattributes text=auto，Windows CI 为 CRLF）：
+	// 比对的是内容而非字节，先归一化行尾再比，否则 Go 常量的 \n 对不上
+	pyRules = strings.ReplaceAll(pyRules, "\r\n", "\n")
 	if strings.TrimSpace(pyRules) != strings.TrimSpace(DefaultRules) {
 		t.Errorf("Go DefaultRules 与 Python IRON_RULES 不一致（改一侧须同步另一侧）")
 	}
