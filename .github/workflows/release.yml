@@ -213,6 +213,10 @@ jobs:
       TAG: ${{ needs.resolve.outputs.tag }}
       PRERELEASE: ${{ needs.resolve.outputs.prerelease }}
     steps:
+      # 检出运行自身的 ref：发布脚本就在这份检出里（重发旧稳定版时也能拿到脚本）
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
       - uses: actions/download-artifact@v4
         with:
           pattern: "{portable,installer}-*"
