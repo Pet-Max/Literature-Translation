@@ -1,7 +1,12 @@
-# release.yml — 打 v* tag 自动构建并发布：质量门禁 → 双产物 → GitHub Release。
-# 结构：Job1 gate（发布前自检，tag push 不经过 check.yml）→ Job2 build（needs: gate）。
-# 门禁实现在 .github/actions/gate（与 check.yml 共用，改门禁只改那里）。
-# 版本一致性守卫：tag 必须等于 internal/version，否则失败。
+# release.yml — 发布工作流：tag v* 推送 / 手动触发 → 门禁 → 解析版本 → 构建
+#              → 打包便携版 ∥ 打包安装版（并行、各自计时）→ 发布 Release。
+# 门禁复用 .github/actions/gate（与 check.yml 同一实现）；本工作流永不触发于分支 push。
+#
+# ── 触发场景对照 ─────────────────────────────────────────────────────
+#   push v* tag         → 门禁 → 版本守卫(tag==internal/version) → 稳定版发布
+#   dispatch 填已有 tag  → 同上（checkout 该 tag）
+#   dispatch tag 留空    → 自动取最新稳定版补丁+1，预发布形态（跳过守卫）
+# ─────────────────────────────────────────────────────────────────────
 name: release
 
 on:
@@ -10,20 +15,21 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "要构建并发布的 tag（如 v1.0.0）"
-        required: true
+        description: "要构建并发布的 tag（如 v1.1.0）；留空 = 最新稳定版补丁+1（预发布）"
+        required: false
         type: string
 
 permissions:
-  contents: read # 默认只读；build job 单独提权写 Release
+  contents: read # 默认只读；publish job 单独提权写 Release
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false # 发布不可互相打断：排队执行
 
 jobs:
-  # ── Job 1：质量门禁（与 check.yml 同套，实现在 composite action） ──────
+  # ── Job 1：质量门禁（复用 composite，与 check.yml 同一实现） ──────────
   gate:
+    name: 质量门禁
     runs-on: windows-latest
     permissions:
       contents: read
@@ -33,40 +39,80 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - uses: ./.github/actions/gate
 
-  # ── Job 2：构建双产物并发布 ────────────────────────────────────────────
-  build:
+  # ── Job 2：解析版本号（tag 场景做版本守卫；留空场景自动补丁+1） ────────
+  resolve:
+    name: 解析版本号
     needs: gate
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
-      contents: write # 创建 Release 与上传产物
+      contents: read
     env:
-      TAG: ${{ inputs.tag || github.ref_name }}
-      ARCH: amd64
+      GH_TOKEN: ${{ github.token }}
+      INPUT_TAG: ${{ inputs.tag }}
+      EVENT: ${{ github.event_name }}
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag || github.ref }}
+      - name: 解析版本号
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 三种来源：tag push / dispatch 显式 tag / dispatch 留空（自动补丁+1）
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"; REF="$INPUT_TAG"; PRERELEASE=false
+          elif [ "$EVENT" = "push" ]; then
+            TAG="$GITHUB_REF_NAME"; REF="$GITHUB_REF_NAME"; PRERELEASE=false
+          else
+            PREV=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq 'map(select(.prerelease == false)) | .[0].tag_name' 2>/dev/null || true)
+            if [ -z "$PREV" ]; then
+              echo "::error::仓库还没有任何 Release，自动推算版本失败；请填入 tag 重试"
+              exit 1
+            fi
+            MAJOR=$(printf '%s' "$PREV" | sed -E 's/^v([0-9]+)\..*/\1/')
+            MINOR=$(printf '%s' "$PREV" | sed -E 's/^v[0-9]+\.([0-9]+)\..*/\1/')
+            PATCH=$(printf '%s' "$PREV" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
+            TAG="v$MAJOR.$MINOR.$((PATCH + 1))"
+            REF="$GITHUB_REF"; PRERELEASE=true
+          fi
+          # 版本守卫：正式构建（tag / 显式 tag）必须与 internal/version 一致
+          if [ "$PRERELEASE" = "false" ]; then
+            SRC=$(sed -nE 's/.*"(v[^"]+)".*/\1/p' internal/version/version.go | head -1)
+            if [ "$TAG" != "$SRC" ]; then
+              echo "::error::tag($TAG) 与 internal/version($SRC) 不一致"
+              exit 1
+            fi
+          fi
+          echo "tag=$TAG"          >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}"  >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
+  # ── Job 3：构建主程序（只编译一次，staging 供两个打包 job 并行取料） ────
+  build:
+    name: 构建主程序
+    needs: resolve
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.checkout_ref }}
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      # 版本一致性守卫：tag 必须等于 internal/version（防「tag 新版、exe 旧版」）
-      - name: Version guard
-        shell: pwsh
-        run: |
-          $src = (Select-String -Path internal/version/version.go -Pattern '"(v.+)"').Matches[0].Groups[1].Value
-          if ("$env:TAG" -ne $src) { Write-Host "::error::tag($env:TAG) 与 internal/version($src) 不一致"; exit 1 }
-          Write-Host "version OK: $src"
-
       - name: Build main exe
         run: go build -tags desktop,production -ldflags "-H windowsgui" -o build/bin/Literature-Translation.exe .
 
-      # 嵌入式 Python 运行时（与本地 prepare_runtime.bat 同款）
+      # 嵌入式 Python 运行时（与本地 scripts\prepare_runtime.bat 同款）
       - name: Prepare embedded python runtime
         shell: pwsh
         run: |
@@ -100,54 +146,108 @@ jobs:
           $global:LASTEXITCODE = 0
           Copy-Item LICENSE $stage/
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staging
+          path: build/package/Literature-Translation
+          retention-days: 3
+
+  # ── Job 4：打包便携版（与安装版并行，独立计时） ────────────────────────
+  package-portable:
+    name: 打包便携版
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: staging
+          path: build/package/Literature-Translation
       - name: Portable zip
         shell: pwsh
-        run: Compress-Archive -Force -Path build/package/Literature-Translation -DestinationPath "build/bin/Literature-Translation-${env:TAG}-windows-${env:ARCH}-portable.zip"
+        run: Compress-Archive -Force -Path build/package/Literature-Translation -DestinationPath "build/bin/Literature-Translation-${{ needs.resolve.outputs.tag }}-windows-amd64-portable.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable
+          path: build/bin/*-portable.zip
+          retention-days: 3
 
+  # ── Job 5：打包安装版（与便携版并行，独立计时） ────────────────────────
+  package-installer:
+    name: 打包安装版
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      # installer.iss / icon / 中文语言包 / LICENSE 是打包输入，从对应 ref 检出
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.resolve.outputs.checkout_ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: staging
+          path: build/package/Literature-Translation
       - name: Installer (Inno Setup)
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
-          $ver = "$env:TAG" -replace '^v',''
-          & $iscc /DAppVersion=$ver build/installer/installer.iss
+          & $iscc /DAppVersion=${{ needs.resolve.outputs.version }} build/installer/installer.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: build/bin/*-Setup-*.exe
+          retention-days: 3
+
+  # ── Job 6：发布（needs 全部上游：门禁+解析+两个打包，缺一不发布） ───────
+  publish:
+    name: 发布_Release
+    needs: [gate, resolve, package-portable, package-installer]
+    runs-on: windows-latest
+    permissions:
+      contents: write # 创建 Release 与上传产物
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      PRERELEASE: ${{ needs.resolve.outputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "{portable,installer}"
+          path: dist
+          merge-multiple: true
 
       - name: Checksums (SHA-256)
         shell: pwsh
         run: |
-          $files = @("build/bin/Literature-Translation-${env:TAG}-windows-amd64-portable.zip",
-                     "build/bin/Literature-Translation-Setup-${env:TAG}-windows-amd64.exe")
-          Get-FileHash -Algorithm SHA256 $files |
-            ForEach-Object { '{0}  {1}' -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } |
-            Set-Content -Encoding ascii build/bin/checksums.txt
-          Get-Content build/bin/checksums.txt
+          Get-ChildItem dist |
+            ForEach-Object { '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower(), $_.Name } |
+            Set-Content -Encoding ascii dist/checksums.txt
+          Get-Content dist/checksums.txt
 
-      - name: Create GitHub Release and upload
+      - name: Release notes + create + upload
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "$env:TAG"
           $owner = ($env:GITHUB_REPOSITORY -split '/')[0]
-          # 发布页三段式：更新日志（全部 commit + 短哈希）→ What's Changed /
+          # 发布页三段式：Changelog（全部 commit + 短哈希）→ What's Changed /
           # New Contributors（仅当有合并 PR）→ Full Changelog。
           # 不用 --generate-notes：个人仓库不走 PR，其 PR 段永远为空。
           # 一次 API 调用同时取「首行标题 + 短哈希」：commit 消息按行输出
           # 会被拍平，PR 提取只对首行做，避免把 commit 正文里的 "(#N)"
           # 引用误认为合并的 PR。短哈希与 tag 区间在 Release 页由 GitHub
           # 自动渲染为链接。
-          $prev = gh api "repos/$env:GITHUB_REPOSITORY/releases" --jq '.[0].tag_name' 2>$null
+          $prev = gh api "repos/$env:GITHUB_REPOSITORY/releases" --jq 'map(select(.prerelease == false)) | .[0].tag_name' 2>$null
           if ($prev) {
             $rows = gh api "repos/$env:GITHUB_REPOSITORY/compare/$prev...$tag" --jq '.commits[] | (.commit.message | split("\n")[0]) + "\t" + .sha[0:7]'
           } else {
             # 首个发布：无对比基准，取 tag 历史上的提交
             $rows = gh api "repos/$env:GITHUB_REPOSITORY/commits?sha=$tag&per_page=50" --jq '.[] | (.commit.message | split("\n")[0]) + "\t" + .sha[0:7]'
           }
-          # 更新日志行 + PR 提取（squash 形态 "(#12)" 与 merge 提交形态
-          # "Merge pull request #12" 都覆盖；PR 号 → 首行标题的映射供
-          # pulls 接口 404（(#N) 实为 issue 引用）时兜底
           $commits = @()
           $prTitles = @{}
           foreach ($r in $rows) {
@@ -158,7 +258,7 @@ jobs:
             }
           }
           $prNums = @($prTitles.Keys | Sort-Object)
-          $notes = "## 更新日志`n`n" + ($commits -join "`n") + "`n"
+          $notes = "## Changelog`n`n" + ($commits -join "`n") + "`n"
           if ($prNums.Count -gt 0) {
             # 有 PR：What's Changed 列 PR（标题+作者+短链）；New Contributors
             # 列仓库所有者之外的 PR 作者——个人仓库阶段外部作者即新贡献者，
@@ -193,5 +293,15 @@ jobs:
           $notes += "`n**Full Changelog**: $changelog"
           $notesFile = "$env:RUNNER_TEMP/release-notes.md"
           Set-Content -Path $notesFile -Value $notes -Encoding utf8NoBOM
-          gh release create $tag --title $tag --notes-file $notesFile --verify-tag
-          gh release upload $tag "build/bin/Literature-Translation-$tag-windows-$env:ARCH-portable.zip" "build/bin/Literature-Translation-Setup-$tag-windows-$env:ARCH.exe" "build/bin/checksums.txt" --clobber
+          # 稳定版校验 tag 已存在 → --verify-tag；自动补丁+1 的预发布 tag 尚不存在
+          # → 由 gh release create 在当前 commit 上代建，不带 --verify-tag
+          $relFlags = @()
+          if ($env:PRERELEASE -eq 'true') {
+            $relFlags += @('--prerelease', '--target', "$env:GITHUB_SHA")
+          } else {
+            $relFlags += '--verify-tag'
+          }
+          gh release create $tag --title $tag --notes-file $notesFile @relFlags
+          $zip = "Literature-Translation-$tag-windows-amd64-portable.zip"
+          $exe = "Literature-Translation-Setup-$tag-windows-amd64.exe"
+          gh release upload $tag "dist/$zip" "dist/$exe" "dist/checksums.txt" --clobber

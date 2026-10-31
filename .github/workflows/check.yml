@@ -1,19 +1,35 @@
-# check.yml — 质量门禁：push main / PR / 手动触发。
+# check.yml — 质量门工作流：任意分支 push / PR / 手动（可选 ref）。永不发布。
 # 五步门禁实现在 .github/actions/gate（与 release.yml 共用，改门禁只改那里）。
+#
+# ── 触发场景对照 ─────────────────────────────────────────────────────
+#   push 任意分支 / PR / dispatch(可选 ref) → 运行本门禁（同 ref 自动取消旧跑）
+#   push v* tag / dispatch 发布              → 走 release.yml（内含同一门禁）
+# ─────────────────────────────────────────────────────────────────────
 name: check
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "要检查的分支或标签（留空 = 触发时的 ref）"
+        required: false
+        type: string
 
 permissions:
   contents: read
+
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true # 同分支并发推送自动取消旧运行
 
 jobs:
   check:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: ./.github/actions/gate
