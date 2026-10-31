@@ -105,7 +105,15 @@ jobs:
           # 版本守卫：稳定通道读「tag 自己的」internal/version 比对——稳定留空
           # 重发时 resolve 检出的是 main，读工作区会误杀合法重发（探针实证）
           if [ "$PRERELEASE" = "false" ]; then
-            SRC=$(gh api "repos/$GITHUB_REPOSITORY/contents/internal/version/version.go?ref=$TAG" --jq '.content' | base64 -d | sed -nE 's/.*"\"(v[^"]+)"\".*/\1/p')
+            # raw 媒体类型直取文件原文，绕过 base64/jq 解码链（CI 曾在此产出空值）
+            RAW=$(gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/internal/version/version.go?ref=$TAG")
+            SRC=$(printf '%s' "$RAW" | sed -nE 's/.*"(v[^"]+)".*/\1/p')
+            if [ -z "$SRC" ]; then
+              echo "::error::tag($TAG) 的 version.go 未能提取版本号（原始内容前 200 字符如下）"
+              printf '%s' "$RAW" | head -c 200
+              echo
+              exit 1
+            fi
             if [ "$TAG" != "$SRC" ]; then
               echo "::error::tag($TAG) 与 internal/version($SRC) 不一致"
               exit 1
