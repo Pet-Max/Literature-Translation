@@ -76,54 +76,8 @@ jobs:
       - name: 解析版本号
         id: resolve
         shell: bash
-        run: |
-          set -euo pipefail
-          STABLE_LATEST=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
-            --jq 'map(select(.prerelease == false)) | .[0].tag_name' 2>/dev/null || true)
-          case "$EVENT-$CHANNEL" in
-            push-* )            # tag push：稳定版，一律发布
-              TAG="$GITHUB_REF_NAME"; REF="$TAG"; PRERELEASE=false; PUBLISH=true ;;
-            dispatch-prerelease )
-              # 预发布：版本可覆盖；留空 = 最新稳定版补丁+1；tag 不存在时发布代建
-              if [ -n "$OVERRIDE" ]; then TAG="$OVERRIDE"
-              else
-                [ -n "$STABLE_LATEST" ] || { echo "::error::仓库无稳定版可推算，请填版本号"; exit 1; }
-                MAJOR=$(printf '%s' "$STABLE_LATEST" | sed -E 's/^v([0-9]+)\..*/\1/')
-                MINOR=$(printf '%s' "$STABLE_LATEST" | sed -E 's/^v[0-9]+\.([0-9]+)\..*/\1/')
-                PATCH=$(printf '%s' "$STABLE_LATEST" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
-                TAG="v$MAJOR.$MINOR.$((PATCH + 1))"
-              fi
-              REF="$GITHUB_REF"; PRERELEASE=true ;;
-            * )                 # stable：重发最新稳定版 / 指定已存在 tag（守卫生效）
-              if [ -n "$OVERRIDE" ]; then TAG="$OVERRIDE"
-              else
-                [ -n "$STABLE_LATEST" ] || { echo "::error::仓库无稳定版可重发，请填 tag"; exit 1; }
-                TAG="$STABLE_LATEST"
-              fi
-              REF="$TAG"; PRERELEASE=false; PUBLISH=true ;;
-          esac
-          # 版本守卫：稳定通道读「tag 自己的」internal/version 比对——稳定留空
-          # 重发时 resolve 检出的是 main，读工作区会误杀合法重发（探针实证）
-          if [ "$PRERELEASE" = "false" ]; then
-            # raw 媒体类型直取文件原文，绕过 base64/jq 解码链（CI 曾在此产出空值）
-            RAW=$(gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/internal/version/version.go?ref=$TAG")
-            SRC=$(printf '%s' "$RAW" | sed -nE 's/.*"(v[^"]+)".*/\1/p')
-            if [ -z "$SRC" ]; then
-              echo "::error::tag($TAG) 的 version.go 未能提取版本号（原始内容前 200 字符如下）"
-              printf '%s' "$RAW" | head -c 200
-              echo
-              exit 1
-            fi
-            if [ "$TAG" != "$SRC" ]; then
-              echo "::error::tag($TAG) 与 internal/version($SRC) 不一致"
-              exit 1
-            fi
-          fi
-          echo "tag=$TAG"          >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}"  >> "$GITHUB_OUTPUT"
-          echo "checkout_ref=$REF" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "publish=$PUBLISH"  >> "$GITHUB_OUTPUT"
+        # 逻辑外置：.github/workflows/scripts/resolve-version.sh（env 经 job 级注入）
+        run: bash .github/workflows/scripts/resolve-version.sh
 
   # ── Job 3：构建主程序（只编译一次，staging 供两个打包 job 并行取料） ────
   build:
@@ -188,7 +142,7 @@ jobs:
   # ── Job 4：打包便携版（与安装版并行，独立计时） ────────────────────────
   package-portable:
     name: 打包便携版
-    needs: build
+    needs: [build, resolve]
     runs-on: windows-latest
     timeout-minutes: 15
     permissions:
@@ -200,7 +154,9 @@ jobs:
           path: build/package/Literature-Translation
       - name: Portable zip
         shell: pwsh
-        run: Compress-Archive -Force -Path build/package/Literature-Translation -DestinationPath "build/bin/Literature-Translation-${{ needs.resolve.outputs.tag }}-windows-amd64-portable.zip"
+        run: |
+          New-Item -ItemType Directory -Force build/bin | Out-Null
+          Compress-Archive -Force -Path build/package/Literature-Translation -DestinationPath "build/bin/Literature-Translation-${{ needs.resolve.outputs.tag }}-windows-amd64-portable.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: portable-${{ github.run_attempt }}
@@ -210,7 +166,7 @@ jobs:
   # ── Job 5：打包安装版（与便携版并行，独立计时） ────────────────────────
   package-installer:
     name: 打包安装版
-    needs: build
+    needs: [build, resolve]
     runs-on: windows-latest
     timeout-minutes: 15
     permissions:
@@ -227,6 +183,7 @@ jobs:
       - name: Installer (Inno Setup)
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force build/bin | Out-Null
           choco install innosetup -y --no-progress
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe" }
@@ -268,82 +225,5 @@ jobs:
 
       - name: Release notes + create + upload
         shell: pwsh
-        run: |
-          $tag = "$env:TAG"
-          $owner = ($env:GITHUB_REPOSITORY -split '/')[0]
-          # 发布页三段式：Changelog（全部 commit + 短哈希）→ What's Changed /
-          # New Contributors（仅当有合并 PR）→ Full Changelog。
-          # 不用 --generate-notes：个人仓库不走 PR，其 PR 段永远为空。
-          # 一次 API 调用同时取「首行标题 + 短哈希」：commit 消息按行输出
-          # 会被拍平，PR 提取只对首行做，避免把 commit 正文里的 "(#N)"
-          # 引用误认为合并的 PR。短哈希与 tag 区间在 Release 页由 GitHub
-          # 自动渲染为链接。
-          $prev = gh api "repos/$env:GITHUB_REPOSITORY/releases" --jq 'map(select(.prerelease == false)) | .[0].tag_name' 2>$null
-          if ($prev) {
-            $rows = gh api "repos/$env:GITHUB_REPOSITORY/compare/$prev...$tag" --jq '.commits[] | (.commit.message | split("\n")[0]) + "\t" + .sha[0:7]'
-          } else {
-            # 首个发布：无对比基准，取 tag 历史上的提交
-            $rows = gh api "repos/$env:GITHUB_REPOSITORY/commits?sha=$tag&per_page=50" --jq '.[] | (.commit.message | split("\n")[0]) + "\t" + .sha[0:7]'
-          }
-          $commits = @()
-          $prTitles = @{}
-          foreach ($r in $rows) {
-            $p = $r -split "`t", 2
-            $commits += "* " + $p[0] + " (" + $p[1] + ")"
-            if ($p[0] -match '\(#(\d+)\)\s*$' -or $p[0] -match '^Merge pull request #(\d+) from') {
-              $prTitles[[int]$Matches[1]] = $p[0]
-            }
-          }
-          $prNums = @($prTitles.Keys | Sort-Object)
-          $notes = "## Changelog`n`n" + ($commits -join "`n") + "`n"
-          if ($prNums.Count -gt 0) {
-            # 有 PR：What's Changed 列 PR（标题+作者+短链）；New Contributors
-            # 列仓库所有者之外的 PR 作者——个人仓库阶段外部作者即新贡献者，
-            # 常客出现后可在发布页手动校正措辞
-            $lines = @()
-            $newC = @()
-            $userPr = @{}
-            foreach ($n in $prNums) {
-              $info = gh api "repos/$env:GITHUB_REPOSITORY/pulls/$n" --jq '.title + "\t" + .user.login' 2>$null
-              if ($info) {
-                $title, $user = $info -split "`t", 2
-                $lines += "* $title by @$user in #$n"
-                if ($user -and $user -ne $owner -and -not $userPr.ContainsKey($user)) {
-                  $userPr[$user] = $n
-                  $newC += $user
-                }
-              } else {
-                # (#N) 引用的是 issue 而非 PR：按 commit 标题列出，不加 PR 链接
-                $lines += "* $($prTitles[$n])"
-              }
-            }
-            $notes += "`n## What's Changed`n`n" + ($lines -join "`n") + "`n"
-            if ($newC.Count -gt 0) {
-              $notes += "`n## New Contributors`n`n"
-              foreach ($u in $newC) {
-                $notes += "* @$u made their first contribution in #$($userPr[$u])`n"
-              }
-              $notes += "`n"
-            }
-          }
-          $changelog = if ($prev) { "$prev...$tag" } else { "$env:GITHUB_REPOSITORY/commits/$tag" }
-          $notes += "`n**Full Changelog**: $changelog"
-          $notesFile = "$env:RUNNER_TEMP/release-notes.md"
-          Set-Content -Path $notesFile -Value $notes -Encoding utf8NoBOM
-          # 稳定版：tag 已存在 → --verify-tag；预发布：tag 不存在 → 发布时由
-          # gh 代建于当前 commit（--target），并标记 --prerelease
-          $relFlags = @()
-          if ($env:PRERELEASE -eq 'true') {
-            $relFlags += @('--prerelease', '--target', "$env:GITHUB_SHA")
-          } else {
-            $relFlags += '--verify-tag'
-          }
-          # 已存在同版本 Release（重发场景）→ 编辑更新说明；不存在 → 创建
-          if (gh release view $tag 2>$null) {
-            gh release edit $tag --notes-file $notesFile
-          } else {
-            gh release create $tag --title $tag --notes-file $notesFile @relFlags
-          }
-          $zip = "Literature-Translation-$tag-windows-amd64-portable.zip"
-          $exe = "Literature-Translation-Setup-$tag-windows-amd64.exe"
-          gh release upload $tag "dist/$zip" "dist/$exe" "dist/checksums.txt" --clobber
+        # 逻辑外置：.github/workflows/scripts/publish-release.ps1（env 经 job 级注入）
+        run: .github/workflows/scripts/publish-release.ps1

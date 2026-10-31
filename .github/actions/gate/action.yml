@@ -1,10 +1,18 @@
 # 质量门禁（composite action）：check.yml 与 release.yml 共用的唯一门禁实现。
 # 改门禁步骤只改这个文件。引用前必须先 checkout（本地 action）。
 name: "质量门禁"
-description: "五步：go vet / ruff / Python 单测 / go test（含管线 E2E）/ 前端 E2E"
+description: "六步：actionlint / go vet / ruff / Python 单测 / go test（含管线 E2E）/ 前端 E2E"
 runs:
   using: composite
   steps:
+    - name: actionlint（workflow 静态检查）
+      shell: pwsh
+      run: |
+        $v = "1.7.7"
+        Invoke-WebRequest "https://github.com/rhysd/actionlint/releases/download/v$v/actionlint_${v}_windows_amd64.zip" -OutFile "$env:RUNNER_TEMP/al.zip"
+        Expand-Archive -Force "$env:RUNNER_TEMP/al.zip" "$env:RUNNER_TEMP/al"
+        & "$env:RUNNER_TEMP/al/actionlint.exe" -color
+
     - uses: actions/setup-go@v6
       with:
         go-version: "1.26"
