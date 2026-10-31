@@ -2,6 +2,8 @@
 
 <h1 align="center">Literature Translation</h1>
 
+<p align="center"><b>英文学术文献翻译桌面应用</b> —— PDF / MD 拖入即翻，产出带公式、图表、参考文献的中文 PDF</p>
+
 <p align="center">
   <a href="https://go.dev"><img alt="Go" src="https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoSize=auto&label=%E8%AF%AD%E8%A8%80"></a>
   <a href="https://www.python.org"><img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoSize=auto&label=%E8%AF%AD%E8%A8%80"></a>
@@ -11,50 +13,23 @@
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-blue"></a>
 </p>
 
-Literature Translation 是一个**英文学术文献翻译桌面应用**。拖入 PDF 或 Markdown，自动走「云端解析 → LLM 翻译 → KaTeX 排版导出」全流程，产出一份带公式、图表、参考文献的中文 PDF。翻译完的文献按每篇一个档案夹自动归档，过程文件完整保留。
-
 ## 界面预览
 
 | 浅色主题（默认） | 深色主题 |
 |:-:|:-:|
 | ![浅色主题](images/preview-tasks-light.png) | ![深色主题](images/preview-tasks-dark.png) |
 
-## 工作流程
-
-```
-拖入文件 → 语言自动路由
-  ├─ 英文 PDF  → MinerU 云端精准解析 → 解析校准 → LLM 翻译 → KaTeX 排版 → 中文 PDF
-  ├─ 英文 MD   → LLM 翻译 → KaTeX 排版 → 中文 PDF
-  ├─ 中文 MD   → 直接排版导出（换字体 / 开目录重出 PDF）
-  └─ 中文 PDF  → 秒拒（不烧配额）
-```
-
-**每篇文献的归档结构**
-
-```
-Literature Library/
-└── Full…/
-    ├── 01_en_pdf/    原始 PDF
-    ├── 02_en_md/     MinerU 解析 + 解析校准后的英文 MD（含图片）
-    ├── 03_zh_md/     中文译文 MD（含图片，双击可看）
-    ├── 04_zh_pdf/    最终排版成品
-    └── _process/         断点缓存 · MinerU 原始解包 · 来源路径
-```
-
 ## 主要功能
 
-- **智能路由**：自动按文件语言分流——英文 PDF 走完整流程、英文 MD 直接翻译、中文 MD 仅导出；中文 PDF 在解析前即被拦截，不浪费云端配额
-- **解析校准**：以原 PDF 文本层为参照，自动修复 MinerU 解析损伤——拼写连字（ef ects→effects）、数学符号（|00i→|00⟩、公式补箭头）、重音符（H¨anggi→Hänggi）、控制码还原（乱码→Λ），以及损伤后恰为合法词的错误（over→offer，词表法无法察觉）；HTML 表格自动转为 Markdown 表格（支持跨行跨列），随译文完整保留。拼写与符号修复在设置里独立开关，已有文献库可离线重跑校准，不消耗配额
-- **公式零损伤**：翻译时用占位符冻结公式（⟦F1⟧），机械校验 $ 配对 / 占位符完整，不合格自动重试；排版用 KaTeX 逐公式渲染，粗体向量 `\boldsymbol` 自动归一；超宽公式自动缩放适配版面
-- **多套翻译规则**：预设可编辑、可切换、可重命名，「生效中」徽标实时标注；改名即时落盘，正文编辑有未保存提醒
-- **术语表**：原文术语 → 统一译名，附在每段翻译指令中，LLM 严格遵循
-- **断点续跑**：每段译文即时落盘，中断后重跑自动跳过已完成段；规则 / 术语 / 模型变更自动使旧缓存失效
-- **文献归档**：每篇文献一个档案夹（默认 `程序目录\Literature Library\`，可自定义），四类产物分目录 + 过程文件全保留，重跑同篇覆盖不堆积
-- **字体系统**：内嵌霞鹜文楷（译文风）/ 宋体（刊物风）/ 黑体（屏读风）三套预设，支持导入自定义字体，实时预览含 KaTeX 公式
-- **连接测试**：MinerU（API Token）与 LLM（模型 API 地址）旁的小图标一键测连通，绿 ✓ 红 ✕ 即时反馈
-- **拉取模型**：从上游 `/v1/models` 拉取可用模型列表，弹出可筛选选择框
-- **队列控制**：任务不自动跑——「开始」按钮统一调度，支持暂停（当前任务跑完即停）和单卡优先
-- **深浅双主题**：曙光白（浅，默认）+ 子夜蓝（深）一键切换，全部组件（含弹窗、滚动条、开关）令牌级适配
+- **智能路由**：按语言自动分流——英文 PDF 全流程、英文 MD 直接翻译、中文 MD 仅导出、中文 PDF 秒拒
+- **解析校准**：以原 PDF 文本层为参照，自动修复解析损伤（符号、拼写、真词、重音符、控制码）；HTML 表格自动转 Markdown，可离线重跑
+- **公式零损伤**：公式整体冻结、原样保留，机械校验不合格自动重试；超宽公式自动缩放
+- **规则与术语**：多套规则预设可编辑切换；术语表统一译名
+- **双语对照**：译文段落后附原文，方便核对
+- **断点续跑**：译文即时落盘，中断重跑自动跳过已完成段
+- **文献归档**：每篇一个档案夹，四类产物与过程文件全保留——`01_en_pdf` 原文 PDF · `02_en_md` 英文 MD · `03_zh_md` 中文 MD · `04_zh_pdf` 成品
+- **字体与主题**：三套内嵌字体 + 自定义导入；浅深双主题一键切换
+- **队列控制**：任务手动调度，支持暂停与单卡优先
 
 ## 快速开始
 
@@ -124,22 +99,6 @@ build.bat
 - **MinerU 报 Token 无效 / A0202？** 到 [mineru.net「API 管理」](https://mineru.net/apiManage/token)重新生成 Token，回设置页粘贴后点输入框右侧 ⇄ 重测。
 - **翻译卡住或某段失败？** 先看「日志」视图——解析、重试、导出的全过程都在。个别段最终失败会保留英文原文并标注，处理完直接重跑，自动断点续译。
 
-## 引擎架构
-
-```
-┌───────────────────────────────────────────┐
-│  GUI (Wails + WebView2)                    │
-│  任务队列 · 设置 · 日志 · 主题              │
-├───────────────────────────────────────────┤
-│  Go 管线层 (internal/pipeline)             │
-│  MinerU 解析 · 解析校准 · 归档 · 渲染导出   │
-├───────────────────────────────────────────┤
-│  Python 引擎 (engine/)                     │
-│  公式冻结 · 分段翻译 · 断点缓存 · 校验重试  │
-│  （stdio JSON-RPC 子进程，无窗口）          │
-└───────────────────────────────────────────┘
-```
-
 ## 隐私与安全
 
 - 凭据保存在本机 `%APPDATA%/Literature Translation/config.json`，不上传、不遥测
@@ -154,7 +113,7 @@ app/           Wails 绑定层（队列、配置、连接测试；路由测试�
 cmd/literature-translation/   CLI 入口（与 GUI 共用 internal/pipeline）
 internal/      能力包：config / pipeline / engine / mineru / render /
                export / fonts / repair / version（版本号唯一定义）
-engine/        Python 翻译边车（stdio JSON-RPC：切段→冻结→翻译→校验→回填）
+engine/        Python 翻译边车（无窗口子进程，stdio JSON-RPC：切段→冻结→翻译→校验→回填）
 frontend/dist/ 前端三件套，即源码、零构建（embed 进主程序）
 tests/         管线 E2E、前端 E2E、overlay 服务器、gui_shim 模拟壳
 build/         图标源与打包产物（bin/ 不入库）
@@ -177,7 +136,6 @@ literature-translation font add|list|use|remove    # 字体管理
 
 - 改前端直接编辑 `frontend/dist/` 三个文件，无构建步骤；改完 `build.bat` 重新打包（前端经 embed 进 exe）
 - 前端 E2E 的 overlay 服务器（`tests/overlay_server.mjs`）直供 dist 并注入 `tests/gui_preview/gui_shim.js`（window.go 的 mock）——**新增 Go 绑定时必须在 shim 里加同名 mock**，否则前端测试挂
-- 版本号唯一来源 `internal/version/version.go`，发版只改这一处
 
 ### 本地打包
 
@@ -193,41 +151,24 @@ package.bat
 
 ### 质量门禁
 
-三层测试体系 + 静态分析，全部本地运行，不需要真实 LLM Key 与 MinerU 配额。一键体检：
+三层测试体系 + 静态分析（vet / ruff / Python 单测 / go test 含管线 E2E / 前端 E2E），全部本地运行，不需要真实 LLM Key 与 MinerU 配额。一键体检：
 
 ```bat
 check.bat
 ```
 
-分项运行：
+两个需要单独跑的项：
 
 ```bash
-# 静态分析：go vet + ruff（规则集见 ruff.toml，只留错误与真 bug 模式）
-go vet ./...
-python -m ruff check engine/
-
-# 引擎纯逻辑单测（Python unittest）
-python -m unittest discover -s engine/tests
-
-# 单元 / 路由 / 归档方案（表驱动，秒级）
-go test ./...
-
-# 管线集成（E2E 第三层）：Go 内嵌 mock LLM 驱动真实 Python 边车 +
-# 排版 + Edge 打印。两个用例：全链路归档产物断言、断点续跑
-# （首轮注入段级失败，二轮断言只补译失败段）（需 PATH 上的 python 与本机 Edge）
-go test ./tests/ -v -run TestE2E
-
-# 模糊测试：吃不可信外部输入的两个函数（种子语料随 go test 常跑，深挖用 -fuzz）
+# 模糊测试：吃不可信外部输入的函数（种子语料随 go test 常跑，深挖用 -fuzz）
 go test ./internal/pipeline -fuzz FuzzNewArchivePlan -fuzztime 30s
-go test ./internal/pipeline -fuzz FuzzFileIsChinese -fuzztime 30s
 
-# 前端组件 E2E：Playwright 驱动真实前端 + mock 壳，
-# 覆盖三视图切换、双主题、自绘弹窗、KaTeX 幂等、连接测试等（需 Chrome/Edge）
+# 前端组件 E2E：Playwright 驱动真实前端 + mock 壳（需 Chrome/Edge）
 npm i --no-save playwright-core
 node tests/e2e_frontend.mjs
 ```
 
-覆盖：语言检测表驱动、路由矩阵（模式 × 文件类型 × 语言）、归档方案（命名/冲突/截断/复用/非法名）、字体校验、公式渲染冻结/解冻、解析校准（符号 / 表格转换 / 上下文锚定 / 重音符）；管线层补齐「翻译 → 校验 → 回填 → 排版 → 打印 → 归档」全链路、断点缓存指纹与续跑；模糊测试守住语言检测与归档命名；前端层覆盖界面交互与主题令牌。
+覆盖：语言路由、归档方案、字体校验、公式冻结/解冻、解析校准全链路、断点续跑、前端交互与主题。
 
 ### 欢迎 PR
 
@@ -245,11 +186,7 @@ node tests/e2e_frontend.mjs
 | 项目                                                         | 许可               | 用途                       |
 | ------------------------------------------------------------ | ------------------ | -------------------------- |
 | [Wails v2](https://wails.io)                                 | MIT                | Go 桌面框架                |
-| [KaTeX](https://katex.org)                                   | MIT                | 公式排版引擎               |
+| [KaTeX](https://katex.org)                                   | MIT                | 公式排版引擎（内嵌）       |
 | [霞鹜文楷](https://github.com/lxgw/LxgwWenKai)（[webfont 打包](https://github.com/chawyehsu/lxgw-wenkai-webfont)） | SIL OFL 1.1 / MIT  | 内嵌中文字体               |
 | [PyMuPDF](https://pymupdf.readthedocs.io)                    | AGPL-3.0           | 引擎的 PDF 文本层抽取      |
-| [httpx](https://www.python-httpx.org)                        | BSD-3-Clause       | 翻译引擎 HTTP 客户端       |
-| [goldmark](https://github.com/yuin/goldmark)                 | MIT                | Markdown 解析              |
-| [chromedp](https://github.com/chromedp/chromedp)             | MIT                | 无头浏览器驱动（PDF 打印） |
-| [Inno Setup](https://jrsoftware.org/isinfo.php) + [中文语言包](https://github.com/jrsoftware/issrc) | Inno Setup License | 安装器与中文向导           |
 | [MinerU](https://mineru.net)                                 | 云服务             | 文档精准解析               |
