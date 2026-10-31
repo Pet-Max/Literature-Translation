@@ -73,6 +73,10 @@ jobs:
       prerelease: ${{ steps.resolve.outputs.prerelease }}
       publish: ${{ steps.resolve.outputs.publish }}
     steps:
+      # 检出触发 ref：脚本文件在工作区里；tag 场景检出 tag，dispatch 检出所选分支
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - name: 解析版本号
         id: resolve
         shell: bash

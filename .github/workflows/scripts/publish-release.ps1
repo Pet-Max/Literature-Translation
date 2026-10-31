@@ -17,7 +17,7 @@ $owner = ($env:GITHUB_REPOSITORY -split '/')[0]
 # 自动渲染为链接。
 $prev = gh api "repos/$env:GITHUB_REPOSITORY/releases" --jq 'map(select(.prerelease == false)) | .[0].tag_name' 2>$null
 if ($prev) {
-  $rows = gh api "repos/$env:GITHUB_REPOSITORY/compare/$prev...$tag" --jq '.commits[] | (.commit.message | split("\n")[0]) + "\t" + .sha[0:7]'
+  $rows = gh api "repos/$env:GITHUB_REPOSITORY/compare/$prev...${env:GITHUB_SHA}" --jq '.commits[] | (.commit.message | split("\n")[0]) + "\t" + .sha[0:7]'
 } else {
   # 首个发布：无对比基准，取 tag 历史上的提交
   $rows = gh api "repos/$env:GITHUB_REPOSITORY/commits?sha=$tag&per_page=50" --jq '.[] | (.commit.message | split("\n")[0]) + "\t" + .sha[0:7]'
