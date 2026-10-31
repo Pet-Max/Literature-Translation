@@ -105,7 +105,7 @@ jobs:
           # 版本守卫：稳定通道读「tag 自己的」internal/version 比对——稳定留空
           # 重发时 resolve 检出的是 main，读工作区会误杀合法重发（探针实证）
           if [ "$PRERELEASE" = "false" ]; then
-            SRC=$(gh api "repos/$env:GITHUB_REPOSITORY/contents/internal/version/version.go?ref=$TAG"
+            SRC=$(gh api "repos/$GITHUB_REPOSITORY/contents/internal/version/version.go?ref=$TAG"
               --jq '.content' | base64 -d | sed -nE 's/.*"\"(v[^"]+)"\".*/\1/p')
             if [ "$TAG" != "$SRC" ]; then
               echo "::error::tag($TAG) 与 internal/version($SRC) 不一致"
