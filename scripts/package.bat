@@ -2,9 +2,9 @@
 REM package.bat - produces two local artifacts from one payload:
 REM   portable  build\bin\Literature-Translation-<ver>-windows-amd64-portable.zip
 REM   installer build\bin\Literature-Translation-Setup-<ver>-windows-amd64.exe (needs Inno Setup 6)
-REM payload: main exe + engine\*.py + runtime\ (portable python; run build\prepare_runtime.bat first)
+REM payload: main exe + engine\*.py + runtime\ (portable python; run scripts\prepare_runtime.bat first)
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 chcp 65001 >nul
 
 rem version single source: internal/version
@@ -14,7 +14,7 @@ set VERNUM=%VER:v=%
 echo packaging %VER%
 
 echo [1/4] building main exe ...
-call build.bat
+call scripts\build.bat
 if errorlevel 1 exit /b 1
 
 echo [2/4] staging payload ...
@@ -24,7 +24,7 @@ mkdir "%STAGE%\engine"
 copy /y "build\bin\Literature-Translation.exe" "%STAGE%\" >nul
 for %%f in (engine\*.py) do copy /y "%%f" "%STAGE%\engine\" >nul
 if not exist "build\runtime\python.exe" (
-    echo [!] runtime missing - run build\prepare_runtime.bat first
+    echo [!] runtime missing - run scripts\prepare_runtime.bat first
     exit /b 1
 )
 robocopy "build\runtime" "%STAGE%\runtime" /E /NFL /NDL /NJH /NJS >nul

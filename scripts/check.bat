@@ -4,7 +4,7 @@ REM + Go tests + frontend E2E. "go test ./..." includes unit tests, fuzz seed
 REM corpus and the pipeline E2E (real Python sidecar + mock LLM; auto-skipped
 REM when python/Edge is missing).
 setlocal
-cd /d "%~dp0"
+cd /d "%~dp0.."
 set FAILED=0
 
 echo [1/5] go vet (Go static analysis)...

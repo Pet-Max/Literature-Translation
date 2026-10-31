@@ -61,7 +61,7 @@ pip install pymupdf httpx
 #### 构建
 
 ```bash
-build.bat
+scripts\build.bat
 ```
 
 产物在 `build/bin/Literature-Translation.exe`
@@ -134,17 +134,17 @@ literature-translation font add|list|use|remove    # 字体管理
 
 ### 本地开发
 
-- 改前端直接编辑 `frontend/dist/` 三个文件，无构建步骤；改完 `build.bat` 重新打包（前端经 embed 进 exe）
+- 改前端直接编辑 `frontend/dist/` 三个文件，无构建步骤；改完 `scripts\build.bat` 重新打包（前端经 embed 进 exe）
 - 前端 E2E 的 overlay 服务器（`tests/overlay_server.mjs`）直供 dist 并注入 `tests/gui_preview/gui_shim.js`（window.go 的 mock）——**新增 Go 绑定时必须在 shim 里加同名 mock**，否则前端测试挂
 
 ### 本地打包
 
 ```bat
 :: 一次性：下载便携 Python（嵌入式 3.12 + pymupdf/httpx），落 build\runtime\
-build\prepare_runtime.bat
+scripts\prepare_runtime.bat
 
 :: 之后每次：构建 exe + 组装载荷，产出两种分发物
-package.bat
+scripts\package.bat
 ```
 
 产物在 `build\bin\`：`Literature-Translation-Setup-vX.Y.Z-windows-amd64.exe`（安装版）与 `Literature-Translation-vX.Y.Z-windows-amd64-portable.zip`（便携版）。载荷 = 主 exe + engine\*.py + 便携运行时，两版同源。
@@ -154,7 +154,7 @@ package.bat
 三层测试体系 + 静态分析（vet / ruff / Python 单测 / go test 含管线 E2E / 前端 E2E），全部本地运行，不需要真实 LLM Key 与 MinerU 配额。一键体检：
 
 ```bat
-check.bat
+scripts\check.bat
 ```
 
 两个需要单独跑的项：
@@ -173,7 +173,7 @@ node tests/e2e_frontend.mjs
 ### 欢迎 PR
 
 1. fork → 建分支
-2. `check.bat` 五步全绿（vet / ruff / Python 单测 / go test / 前端 E2E）
+2. `scripts\check.bat` 五步全绿（vet / ruff / Python 单测 / go test / 前端 E2E）
 3. 提 PR——CI 自动跑同一套门禁（PR 只跑门禁、不产出安装包；首次贡献者的 CI 需维护者在 Actions 页批准一次后运行）
 4. 约定：gofmt 与 ruff 零告警；新 Go 绑定必须同步 shim mock；归档目录常量在 `internal/pipeline/outputplan.go`，默认规则文本在 `internal/config`
 
