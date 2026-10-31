@@ -3,9 +3,10 @@
 # 门禁复用 .github/actions/gate（与 check.yml 同一实现）；本工作流永不触发于分支 push。
 #
 # ── 触发场景对照 ─────────────────────────────────────────────────────
-#   push v* tag         → 门禁 → 版本守卫(tag==internal/version) → 稳定版发布
-#   dispatch 填已有 tag  → 同上（checkout 该 tag）
-#   dispatch tag 留空    → 自动取最新稳定版补丁+1，预发布形态（跳过守卫）
+#   push v* tag                   → 门禁 → 守卫 → 构建 → 双包并行 → 稳定版发布
+#   dispatch（channel=stable）    → 重发最新稳定版 / 指定 tag（守卫生效；tag 须已存在）
+#   dispatch（channel=prerelease）→ 版本覆盖或自动+1，预发布（跳过守卫，tag 可代建）
+#   dispatch（publish 不勾）      → 只构建不发布，产物留在 run Artifacts 供人工检查
 # ─────────────────────────────────────────────────────────────────────
 name: release
 
@@ -14,10 +15,21 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
+      channel:
+        description: "发布通道"
+        required: false
+        type: choice
+        options: [stable, prerelease]
+        default: stable
       tag:
-        description: "要构建并发布的 tag（如 v1.1.0）；留空 = 最新稳定版补丁+1（预发布）"
+        description: "版本号覆盖（如 v1.2.0-rc.1）；留空自动推算。stable 通道须为远端已存在的 tag"
         required: false
         type: string
+      publish:
+        description: "构建后发布 Release（不勾 = 只构建，产物留 Artifacts）"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read # 默认只读；publish job 单独提权写 Release
@@ -31,6 +43,7 @@ jobs:
   gate:
     name: 质量门禁
     runs-on: windows-latest
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
@@ -39,51 +52,61 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - uses: ./.github/actions/gate
 
-  # ── Job 2：解析版本号（tag 场景做版本守卫；留空场景自动补丁+1） ────────
+  # ── Job 2：解析版本号（通道决定守卫与推算；outputs 含 publish 门条件） ──
   resolve:
     name: 解析版本号
     needs: gate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     env:
       GH_TOKEN: ${{ github.token }}
-      INPUT_TAG: ${{ inputs.tag }}
       EVENT: ${{ github.event_name }}
+      CHANNEL: ${{ inputs.channel }}
+      OVERRIDE: ${{ inputs.tag }}
+      PUBLISH_INPUT: ${{ inputs.publish }}
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
       checkout_ref: ${{ steps.resolve.outputs.checkout_ref }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
+      publish: ${{ steps.resolve.outputs.publish }}
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag || github.ref }}
       - name: 解析版本号
         id: resolve
         shell: bash
         run: |
           set -euo pipefail
-          # 三种来源：tag push / dispatch 显式 tag / dispatch 留空（自动补丁+1）
-          if [ -n "$INPUT_TAG" ]; then
-            TAG="$INPUT_TAG"; REF="$INPUT_TAG"; PRERELEASE=false
-          elif [ "$EVENT" = "push" ]; then
-            TAG="$GITHUB_REF_NAME"; REF="$GITHUB_REF_NAME"; PRERELEASE=false
-          else
-            PREV=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq 'map(select(.prerelease == false)) | .[0].tag_name' 2>/dev/null || true)
-            if [ -z "$PREV" ]; then
-              echo "::error::仓库还没有任何 Release，自动推算版本失败；请填入 tag 重试"
-              exit 1
-            fi
-            MAJOR=$(printf '%s' "$PREV" | sed -E 's/^v([0-9]+)\..*/\1/')
-            MINOR=$(printf '%s' "$PREV" | sed -E 's/^v[0-9]+\.([0-9]+)\..*/\1/')
-            PATCH=$(printf '%s' "$PREV" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
-            TAG="v$MAJOR.$MINOR.$((PATCH + 1))"
-            REF="$GITHUB_REF"; PRERELEASE=true
-          fi
-          # 版本守卫：正式构建（tag / 显式 tag）必须与 internal/version 一致
+          STABLE_LATEST=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+            --jq 'map(select(.prerelease == false)) | .[0].tag_name' 2>/dev/null || true)
+          case "$EVENT-$CHANNEL" in
+            push-* )            # tag push：稳定版，一律发布
+              TAG="$GITHUB_REF_NAME"; REF="$TAG"; PRERELEASE=false; PUBLISH=true ;;
+            dispatch-prerelease )
+              # 预发布：版本可覆盖；留空 = 最新稳定版补丁+1；tag 不存在时发布代建
+              if [ -n "$OVERRIDE" ]; then TAG="$OVERRIDE"
+              else
+                [ -n "$STABLE_LATEST" ] || { echo "::error::仓库无稳定版可推算，请填版本号"; exit 1; }
+                MAJOR=$(printf '%s' "$STABLE_LATEST" | sed -E 's/^v([0-9]+)\..*/\1/')
+                MINOR=$(printf '%s' "$STABLE_LATEST" | sed -E 's/^v[0-9]+\.([0-9]+)\..*/\1/')
+                PATCH=$(printf '%s' "$STABLE_LATEST" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
+                TAG="v$MAJOR.$MINOR.$((PATCH + 1))"
+              fi
+              REF="$GITHUB_REF"; PRERELEASE=true ;;
+            * )                 # stable：重发最新稳定版 / 指定已存在 tag（守卫生效）
+              if [ -n "$OVERRIDE" ]; then TAG="$OVERRIDE"
+              else
+                [ -n "$STABLE_LATEST" ] || { echo "::error::仓库无稳定版可重发，请填 tag"; exit 1; }
+                TAG="$STABLE_LATEST"
+              fi
+              REF="$TAG"; PRERELEASE=false; PUBLISH=true ;;
+          esac
+          # 版本守卫：稳定通道读「tag 自己的」internal/version 比对——稳定留空
+          # 重发时 resolve 检出的是 main，读工作区会误杀合法重发（探针实证）
           if [ "$PRERELEASE" = "false" ]; then
-            SRC=$(sed -nE 's/.*"(v[^"]+)".*/\1/p' internal/version/version.go | head -1)
+            SRC=$(gh api "repos/$env:GITHUB_REPOSITORY/contents/internal/version/version.go?ref=$TAG"
+              --jq '.content' | base64 -d | sed -nE 's/.*"\"(v[^"]+)"\".*/\1/p')
             if [ "$TAG" != "$SRC" ]; then
               echo "::error::tag($TAG) 与 internal/version($SRC) 不一致"
               exit 1
@@ -93,12 +116,14 @@ jobs:
           echo "version=${TAG#v}"  >> "$GITHUB_OUTPUT"
           echo "checkout_ref=$REF" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH"  >> "$GITHUB_OUTPUT"
 
   # ── Job 3：构建主程序（只编译一次，staging 供两个打包 job 并行取料） ────
   build:
     name: 构建主程序
     needs: resolve
     runs-on: windows-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -148,7 +173,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: staging
+          # run_attempt 后缀：Re-run all jobs 重建同名产物不再冲突
+          name: staging-${{ github.run_attempt }}
           path: build/package/Literature-Translation
           retention-days: 3
 
@@ -157,19 +183,20 @@ jobs:
     name: 打包便携版
     needs: build
     runs-on: windows-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: staging
+          name: staging-${{ github.run_attempt }}
           path: build/package/Literature-Translation
       - name: Portable zip
         shell: pwsh
         run: Compress-Archive -Force -Path build/package/Literature-Translation -DestinationPath "build/bin/Literature-Translation-${{ needs.resolve.outputs.tag }}-windows-amd64-portable.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: portable
+          name: portable-${{ github.run_attempt }}
           path: build/bin/*-portable.zip
           retention-days: 3
 
@@ -178,6 +205,7 @@ jobs:
     name: 打包安装版
     needs: build
     runs-on: windows-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -187,7 +215,7 @@ jobs:
           ref: ${{ needs.resolve.outputs.checkout_ref }}
       - uses: actions/download-artifact@v4
         with:
-          name: staging
+          name: staging-${{ github.run_attempt }}
           path: build/package/Literature-Translation
       - name: Installer (Inno Setup)
         shell: pwsh
@@ -199,15 +227,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
       - uses: actions/upload-artifact@v4
         with:
-          name: installer
+          name: installer-${{ github.run_attempt }}
           path: build/bin/*-Setup-*.exe
           retention-days: 3
 
-  # ── Job 6：发布（needs 全部上游：门禁+解析+两个打包，缺一不发布） ───────
+  # ── Job 6：发布（needs 全部上游；通道门条件——未选发布则跳过留产物） ─────
   publish:
     name: 发布_Release
     needs: [gate, resolve, package-portable, package-installer]
+    if: needs.resolve.outputs.publish == 'true'
     runs-on: windows-latest
+    timeout-minutes: 15
     permissions:
       contents: write # 创建 Release 与上传产物
     env:
@@ -217,7 +247,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: "{portable,installer}"
+          pattern: "{portable,installer}-*"
           path: dist
           merge-multiple: true
 
@@ -293,15 +323,20 @@ jobs:
           $notes += "`n**Full Changelog**: $changelog"
           $notesFile = "$env:RUNNER_TEMP/release-notes.md"
           Set-Content -Path $notesFile -Value $notes -Encoding utf8NoBOM
-          # 稳定版校验 tag 已存在 → --verify-tag；自动补丁+1 的预发布 tag 尚不存在
-          # → 由 gh release create 在当前 commit 上代建，不带 --verify-tag
+          # 稳定版：tag 已存在 → --verify-tag；预发布：tag 不存在 → 发布时由
+          # gh 代建于当前 commit（--target），并标记 --prerelease
           $relFlags = @()
           if ($env:PRERELEASE -eq 'true') {
             $relFlags += @('--prerelease', '--target', "$env:GITHUB_SHA")
           } else {
             $relFlags += '--verify-tag'
           }
-          gh release create $tag --title $tag --notes-file $notesFile @relFlags
+          # 已存在同版本 Release（重发场景）→ 编辑更新说明；不存在 → 创建
+          if (gh release view $tag 2>$null) {
+            gh release edit $tag --notes-file $notesFile
+          } else {
+            gh release create $tag --title $tag --notes-file $notesFile @relFlags
+          }
           $zip = "Literature-Translation-$tag-windows-amd64-portable.zip"
           $exe = "Literature-Translation-Setup-$tag-windows-amd64.exe"
           gh release upload $tag "dist/$zip" "dist/$exe" "dist/checksums.txt" --clobber
