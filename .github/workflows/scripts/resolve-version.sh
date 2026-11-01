@@ -48,6 +48,12 @@ if [ "$PRERELEASE" = "false" ]; then
     echo
     exit 1
   fi
+  # tag 与 version.go 一致性比对：错版（如 tag v1.2.0 配 version.go v1.1.1）在此拦截，
+  # 防止发布"产物名与界面版本不一致"的错版
+  if [ "$SRC" != "$TAG" ]; then
+    echo "::error::tag($TAG) 与 internal/version($SRC) 不一致：请先改 internal/version/version.go 再打 tag"
+    exit 1
+  fi
 fi
 
 echo "tag=$TAG"          >> "$GITHUB_OUTPUT"

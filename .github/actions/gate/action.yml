@@ -23,7 +23,7 @@ runs:
 
     - name: Install Python deps
       shell: pwsh
-      run: pip install pymupdf httpx ruff
+      run: pip install pymupdf==1.26.7 httpx==0.28.1 ruff
 
     - name: go vet
       shell: pwsh

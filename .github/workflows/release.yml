@@ -102,25 +102,10 @@ jobs:
       - name: Build main exe
         run: go build -tags desktop,production -ldflags "-H windowsgui" -o build/bin/Literature-Translation.exe .
 
-      # 嵌入式 Python 运行时（与本地 scripts\prepare_runtime.bat 同款）
+      # 嵌入式 Python 运行时：直接复用本地脚本（单一事实源——pymupdf 版本锁定与构建期清理只在脚本里维护）
       - name: Prepare embedded python runtime
-        shell: pwsh
-        run: |
-          $rt = "build/runtime"
-          New-Item -ItemType Directory -Force $rt | Out-Null
-          Invoke-WebRequest "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip" -OutFile "$rt/py.zip"
-          Expand-Archive -Force "$rt/py.zip" $rt
-          Remove-Item "$rt/py.zip"
-          (Get-Content "$rt/python312._pth") -replace '#\s*import site','import site' | Set-Content "$rt/python312._pth"
-          Add-Content "$rt/python312._pth" "Lib/site-packages"
-          Invoke-WebRequest https://bootstrap.pypa.io/get-pip.py -OutFile "$rt/get-pip.py"
-          & "$rt\python.exe" "$rt/get-pip.py" --no-warn-script-location --quiet
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          & "$rt\python.exe" -m pip install --quiet --no-warn-script-location pymupdf httpx
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          Remove-Item "$rt/get-pip.py"
-          & "$rt\python.exe" -c "import fitz, httpx; print('runtime OK')" 2>$null
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+        shell: cmd
+        run: scripts\prepare_runtime.bat
 
       - name: Stage payload
         shell: pwsh
