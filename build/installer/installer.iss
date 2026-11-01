@@ -4,7 +4,7 @@
 
 #define AppName "Literature Translation"
 #ifndef AppVersion
-#define AppVersion "1.1.0"
+#define AppVersion "1.2.0"
 #endif
 
 [Setup]
@@ -38,8 +38,6 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\package\Literature-Translation\Literature-Translation.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\package\Literature-Translation\engine\*"; DestDir: "{app}\engine"; Flags: ignoreversion recursesubdirs
-Source: "..\package\Literature-Translation\runtime\*"; DestDir: "{app}\runtime"; Flags: ignoreversion recursesubdirs
 Source: "..\package\Literature-Translation\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

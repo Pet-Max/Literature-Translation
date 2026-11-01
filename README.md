@@ -6,7 +6,6 @@
 
 <p align="center">
   <a href="https://go.dev"><img alt="Go" src="https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoSize=auto&label=%E8%AF%AD%E8%A8%80"></a>
-  <a href="https://www.python.org"><img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoSize=auto&label=%E8%AF%AD%E8%A8%80"></a>
   <a href="https://wails.io"><img alt="Framework" src="https://img.shields.io/badge/Framework-Wails%20v2-FF5227"></a>
   <a href="https://github.com/Pet-Max/Literature-Translation/releases"><img alt="Platform" src="https://img.shields.io/badge/Platform-Windows-lightgrey"></a>
   <a href="https://github.com/Pet-Max/Literature-Translation/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/Pet-Max/Literature-Translation?logo=github&label=Release"></a>
@@ -23,12 +22,12 @@
 
 - **智能路由**：按语言自动分流——英文 PDF 全流程、英文 MD 直接翻译、中文 MD 仅导出、中文 PDF 秒拒
 - **解析校准**：以原 PDF 文本层为参照，自动修复解析损伤（符号、拼写、真词、重音符、控制码）；HTML 表格自动转 Markdown，可离线重跑
-- **公式零损伤**：公式整体冻结、原样保留，机械校验不合格自动重试；超宽公式自动缩放
+- **公式零损伤**：公式整体冻结、原样保留，机械校验不合格自动重试；公式横线贴近 LaTeX 印刷粗细
 - **规则与术语**：多套规则预设可编辑切换；术语表统一译名
 - **双语对照**：译文段落后附原文，方便核对
 - **断点续跑**：译文即时落盘，中断重跑自动跳过已完成段
 - **文献归档**：每篇一个档案夹，四类产物与过程文件全保留——`01_en_pdf` 原文 PDF · `02_en_md` 英文 MD · `03_zh_md` 中文 MD · `04_zh_pdf` 成品
-- **字体与主题**：三套内嵌字体 + 自定义导入；浅深双主题一键切换
+- **字体与主题**：三套字体方案（文楷内嵌）+ 自定义导入；浅深双主题一键切换
 - **队列控制**：任务手动调度，支持暂停与单卡优先
 
 ## 快速开始
@@ -47,16 +46,9 @@
 | 组件 | 说明 |
 |------|------|
 | Windows 10 / 11 | 目前仅支持 Windows（WebView2 与 Edge 系统内置，无需另装） |
-| Go 1.26+ | 构建主程序 |
-| Python 3.10+ | 翻译引擎（[PyMuPDF](https://pymupdf.readthedocs.io) + [httpx](https://www.python-httpx.org)） |
+| Go 1.26+ | 构建主程序（翻译引擎内置，无需 Python） |
 | [MinerU](https://mineru.net) 账号 | 精准解析 API Token |
 | 任意 OpenAI 兼容 LLM | 模型 API 地址 + API Key + 模型名 |
-
-#### 安装依赖
-
-```bash
-pip install pymupdf httpx
-```
 
 #### 构建
 
@@ -81,7 +73,7 @@ scripts\build.bat
 3. 点「开始」——队列串行处理，可暂停 / 单卡优先
 4. 完成后点「中文 PDF」打开成品，「打开文件夹」直达归档目录
 
-> **看看效果**：[该文献](samples/example-document-cn.pdf) 是 arXiv 论文（2207.00867）经本应用实际翻译导出的成品——排版、公式、参考文献样式即真实所见。对应的[英文原文](samples/example-document-en.pdf)也可以直接拖进应用，自己跑一遍。
+> **看看效果**：[该文献](samples/example-document-cn.pdf) 是经本应用翻译的成品——排版、公式、图表、参考文献样式即真实所见。对应的[英文原文](samples/example-document-en.pdf)也可以直接拖进应用，自己实测一遍。
 
 **进阶：用环境变量管理密钥（可选）**
 
@@ -95,7 +87,7 @@ scripts\build.bat
 
 - **双击 exe 弹出 SmartScreen 警告？** 应用暂未做代码签名，点「更多信息 → 仍要运行」即可。
 - **提示找不到 Microsoft Edge？** 导出 PDF 依赖系统 Edge（Win10/11 内置）。若系统被精简过，安装 Edge 即可，无需任何配置。
-- **启动提示 Python 相关错误？** 翻译引擎需要 Python 3.10+ 与依赖（`pip install pymupdf httpx`）；也可用环境变量 `LITERATURE_PYTHON` 指定解释器路径。
+- **翻译引擎报错？** 翻译引擎内置于应用内（Go 实现）；若报 LLM 相关错误，先检查设置页的 LLM 地址/Key/模型名。
 - **MinerU 报 Token 无效 / A0202？** 到 [mineru.net「API 管理」](https://mineru.net/apiManage/token)重新生成 Token，回设置页粘贴后点输入框右侧 ⇄ 重测。
 - **翻译卡住或某段失败？** 先看「日志」视图——解析、重试、导出的全过程都在。个别段最终失败会保留英文原文并标注，处理完直接重跑，自动断点续译。
 
@@ -103,7 +95,7 @@ scripts\build.bat
 
 - 凭据保存在本机 `%APPDATA%/Literature Translation/config.json`，不上传、不遥测
 - 翻译内容仅经过你配置的 LLM 接口和 MinerU 云端，本工具自身不收集任何数据
-- 断点缓存只含源段哈希与译文，不含 API Key
+- 断点缓存只含任务指纹、源段哈希、译文与失败原因，不含 API Key
 
 ## 开发指南
 
@@ -111,9 +103,9 @@ scripts\build.bat
 main.go        GUI 入口（Wails v2，go:embed 前端资源）
 app/           Wails 绑定层（队列、配置、连接测试；路由测试在此）
 cmd/literature-translation/   CLI 入口（与 GUI 共用 internal/pipeline）
-internal/      能力包：config / pipeline / engine / mineru / render /
+internal/      能力包：config / pipeline / engine（内置 Go 翻译引擎：切段→冻结→
+               翻译→校验→回填）/ pdftext（PDF 文本层）/ mineru / render /
                export / fonts / repair / version（版本号唯一定义）
-engine/        Python 翻译边车（无窗口子进程，stdio JSON-RPC：切段→冻结→翻译→校验→回填）
 frontend/dist/ 前端三件套，即源码、零构建（embed 进主程序）
 tests/         管线 E2E、前端 E2E、overlay 服务器、gui_shim 模拟壳
 build/         图标源与打包产物（bin/ 不入库）
@@ -140,18 +132,15 @@ literature-translation font add|list|use|remove    # 字体管理
 ### 本地打包
 
 ```bat
-:: 一次性：下载便携 Python（嵌入式 3.12 + pymupdf/httpx），落 build\runtime\
-scripts\prepare_runtime.bat
-
-:: 之后每次：构建 exe + 组装载荷，产出两种分发物
+:: 构建 exe + 组装载荷，产出两种分发物
 scripts\package.bat
 ```
 
-产物在 `build\bin\`：`Literature-Translation-Setup-vX.Y.Z-windows-amd64.exe`（安装版）与 `Literature-Translation-vX.Y.Z-windows-amd64-portable.zip`（便携版）。载荷 = 主 exe + engine\*.py + 便携运行时，两版同源。
+产物在 `build\bin\`：`Literature-Translation-Setup-vX.Y.Z-windows-amd64.exe`（安装版）与 `Literature-Translation-vX.Y.Z-windows-amd64-portable.zip`（便携版）。载荷 = 主 exe + LICENSE，两版同源。
 
 ### 质量门禁
 
-三层测试体系 + 静态分析（vet / ruff / Python 单测 / go test 含管线 E2E / 前端 E2E），全部本地运行，不需要真实 LLM Key 与 MinerU 配额。一键体检：
+三层测试体系 + 静态分析（vet / workflow lint / go test 含管线 E2E / 前端 E2E），全部本地运行，不需要真实 LLM Key 与 MinerU 配额。一键体检：
 
 ```bat
 scripts\check.bat
@@ -168,14 +157,14 @@ npm i --no-save playwright-core
 node tests/e2e_frontend.mjs
 ```
 
-覆盖：语言路由、归档方案、字体校验、公式冻结/解冻、解析校准全链路、断点续跑、前端交互与主题。
+覆盖：语言路由、归档方案、字体校验、公式冻结/解冻、抽取对拍（词表级硬门槛）、解析校准全链路、断点续跑、前端交互与主题。
 
 ### 欢迎 PR
 
 1. fork → 建分支
-2. `scripts\check.bat` 五步全绿（vet / ruff / Python 单测 / go test / 前端 E2E）
-3. 提 PR——CI 自动跑同一套门禁（PR 只跑门禁、不产出安装包；首次贡献者的 CI 需维护者在 Actions 页批准一次后运行）
-4. 约定：gofmt 与 ruff 零告警；新 Go 绑定必须同步 shim mock；归档目录常量在 `internal/pipeline/outputplan.go`，默认规则文本在 `internal/config`
+2. `scripts\check.bat` 四步全绿（vet / workflow lint / go test / 前端 E2E）
+3. 提 PR——CI 自动跑同一套门禁（PR 只跑门禁、不产出安装包）
+4. 约定：gofmt 零告警；新 Go 绑定必须同步 shim mock；归档目录常量在 `internal/pipeline/outputplan.go`，默认规则文本在 `internal/config`
 
 ## License
 
@@ -188,5 +177,5 @@ node tests/e2e_frontend.mjs
 | [Wails v2](https://wails.io)                                 | MIT                | Go 桌面框架                |
 | [KaTeX](https://katex.org)                                   | MIT                | 公式排版引擎（内嵌）       |
 | [霞鹜文楷](https://github.com/lxgw/LxgwWenKai)（[webfont 打包](https://github.com/chawyehsu/lxgw-wenkai-webfont)） | SIL OFL 1.1 / MIT  | 内嵌中文字体               |
-| [PyMuPDF](https://pymupdf.readthedocs.io)                    | AGPL-3.0           | 引擎的 PDF 文本层抽取      |
+| [PDFium](https://pdfium.googlesource.com/pdfium/)（经 [go-pdfium](https://github.com/klippa-app/go-pdfium) 内嵌 wasm） | BSD-3-Clause / MIT | 引擎的 PDF 文本层抽取 |
 | [MinerU](https://mineru.net)                                 | 云服务             | 文档精准解析               |

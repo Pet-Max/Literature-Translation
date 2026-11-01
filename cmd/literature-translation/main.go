@@ -1,6 +1,6 @@
 // literature-translation — Literature Translation 命令行版（GUI 与本 CLI 共用 internal/pipeline 核心编排）。
 //
-//	literature-translation check              预检：配置 / Python 引擎 / Edge
+//	literature-translation check              预检：配置 / 内置 Go 引擎 / Edge
 //	literature-translation run paper.pdf      全流程：解析 → 校准 → 翻译 → 导出中文 PDF
 //	literature-translation translate doc.md   翻译已有 MD 并导出（跳过解析）
 //	literature-translation print doc.md       本地排版导出 PDF（不翻译）
@@ -222,7 +222,7 @@ func translateCmd(args []string) error {
 // ---------------------------------------------------------------- calibrate
 
 // calibrateCmd 对已解析英文 MD 离线重跑校准：修复拼写/真词/符号损伤。
-// 不需要 MinerU 与 LLM 配置，只依赖本地 Python 引擎抽文本层。
+// 不需要 MinerU 与 LLM 配置，只依赖内置 Go 引擎抽文本层。
 func calibrateCmd(args []string) error {
 	fs := flag.NewFlagSet("calibrate", flag.ExitOnError)
 	if err := fs.Parse(args); err != nil {

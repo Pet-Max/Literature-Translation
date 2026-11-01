@@ -1,0 +1,188 @@
+{
+ "md": "# Alpha\n\nThe first section translates normally in both runs.\n\n## Beta\n\nThe middle section contains ZZFAILZZ and should fail on the first scenario kind only.\n\n# Gamma\n\n[1] J. Doe, A. Smith, and B. Lee, Mock citation for testing purposes, Phys. Rev. A 100, 012345 (2019).\n",
+ "mark": "\n\n（机翻译文冒烟标记）",
+ "cases": {
+  "all_pass": {
+   "events": [
+    {
+     "event": "progress",
+     "done": 1,
+     "total": 4,
+     "failed": 0,
+     "done_idx": [
+      0
+     ],
+     "failed_idx": []
+    },
+    {
+     "event": "progress",
+     "done": 2,
+     "total": 4,
+     "failed": 0,
+     "done_idx": [
+      0,
+      1
+     ],
+     "failed_idx": []
+    },
+    {
+     "event": "progress",
+     "done": 4,
+     "total": 4,
+     "failed": 0,
+     "done_idx": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "failed_idx": []
+    },
+    {
+     "event": "progress",
+     "done": 4,
+     "total": 4,
+     "failed": 0,
+     "done_idx": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "failed_idx": []
+    }
+   ],
+   "final": {
+    "id": 1,
+    "ok": true,
+    "result": {
+     "total": 4,
+     "done": 4,
+     "failed": [],
+     "kept_references": 1,
+     "warnings": [],
+     "out_path": "<TMP>"
+    }
+   }
+  },
+  "mid_fail": {
+   "events": [
+    {
+     "event": "progress",
+     "done": 1,
+     "total": 4,
+     "failed": 0,
+     "done_idx": [
+      0
+     ],
+     "failed_idx": []
+    },
+    {
+     "event": "progress",
+     "done": 1,
+     "total": 4,
+     "failed": 1,
+     "done_idx": [
+      0
+     ],
+     "failed_idx": [
+      1
+     ]
+    },
+    {
+     "event": "progress",
+     "done": 3,
+     "total": 4,
+     "failed": 1,
+     "done_idx": [
+      0,
+      2,
+      3
+     ],
+     "failed_idx": [
+      1
+     ]
+    },
+    {
+     "event": "progress",
+     "done": 3,
+     "total": 4,
+     "failed": 1,
+     "done_idx": [
+      0,
+      2,
+      3
+     ],
+     "failed_idx": [
+      1
+     ]
+    },
+    {
+     "event": "progress",
+     "done": 3,
+     "total": 4,
+     "failed": 1,
+     "done_idx": [
+      0,
+      2,
+      3
+     ],
+     "failed_idx": [
+      1
+     ],
+     "sweep": true
+    },
+    {
+     "event": "progress",
+     "done": 3,
+     "total": 4,
+     "failed": 1,
+     "done_idx": [
+      0,
+      2,
+      3
+     ],
+     "failed_idx": [
+      1
+     ],
+     "sweep": true
+    }
+   ],
+   "final": {
+    "id": 1,
+    "ok": true,
+    "result": {
+     "total": 4,
+     "done": 3,
+     "failed": [
+      {
+       "i": 1,
+       "reasons": "标题数不一致（原文 1，译文 0）"
+      }
+     ],
+     "kept_references": 1,
+     "warnings": [],
+     "out_path": "<TMP>"
+    }
+   }
+  }
+ },
+ "cache_keys": {
+  "iron|false|true": "550e9432573b",
+  "iron|false|true|system": "你是一名物理学/学术文献翻译引擎。把用户消息中的 Markdown 学术文本翻译成简体中文，严格遵守：\n\n1. 只翻译自然语言文字；⟦F1⟧、⟦F2⟧ 这类 ⟦F数字⟧ 占位符（代表公式、代码、图片）必须原样保留：一个不能少、一个不能改、位置不能移动，也不要试图翻译或解读占位符内容。\n2. Eq. (5)、Fig. 3、Table 1、Ref. [12]、arXiv:2306.00417、附录编号 S IV 等引用编号保留原样，不要翻译 Eq./Fig. 等标记。\n3. Markdown 结构保持不变：标题层级（# 数量）、列表、引用块、加粗斜体、链接、表格与原文一一对应；标题译文务必简短。表格逐行保持竖线 | 与列数不变，只翻译单元格内的文字，单元格内的占位符原样保留。\n4. 物理记号原样保留：狄拉克记号（|00⟩、⟨01|）、希腊字母（Λ、Ω、ψ）、上下标变量，以及无法识别的乱码字符——一律不翻译、不删除、不猜测含义、不改写。\n5. 专有名词、人名按学界惯例处理：有通用中译的用中译（如 Langevin→朗之万），没有的保留原文。\n6. 术语严格按下方术语表统一译名。\n7. 只输出译文本身。不要任何解释、前言、结语、代码围栏包裹。",
+  "iron|true|false": "b9d9498c67da",
+  "iron|true|false|system": "你是一名物理学/学术文献翻译引擎。把用户消息中的 Markdown 学术文本翻译成简体中文，严格遵守：\n\n1. 只翻译自然语言文字；⟦F1⟧、⟦F2⟧ 这类 ⟦F数字⟧ 占位符（代表公式、代码、图片）必须原样保留：一个不能少、一个不能改、位置不能移动，也不要试图翻译或解读占位符内容。\n2. Eq. (5)、Fig. 3、Table 1、Ref. [12]、arXiv:2306.00417、附录编号 S IV 等引用编号保留原样，不要翻译 Eq./Fig. 等标记。\n3. Markdown 结构保持不变：标题层级（# 数量）、列表、引用块、加粗斜体、链接、表格与原文一一对应；标题译文务必简短。表格逐行保持竖线 | 与列数不变，只翻译单元格内的文字，单元格内的占位符原样保留。\n4. 物理记号原样保留：狄拉克记号（|00⟩、⟨01|）、希腊字母（Λ、Ω、ψ）、上下标变量，以及无法识别的乱码字符——一律不翻译、不删除、不猜测含义、不改写。\n5. 专有名词、人名按学界惯例处理：有通用中译的用中译（如 Langevin→朗之万），没有的保留原文。\n6. 术语严格按下方术语表统一译名。\n7. 只输出译文本身。不要任何解释、前言、结语、代码围栏包裹。",
+  "glossary|false|true": "6dff2352320b",
+  "glossary|false|true|system": "你是一名物理学/学术文献翻译引擎。把用户消息中的 Markdown 学术文本翻译成简体中文，严格遵守：\n\n1. 只翻译自然语言文字；⟦F1⟧、⟦F2⟧ 这类 ⟦F数字⟧ 占位符（代表公式、代码、图片）必须原样保留：一个不能少、一个不能改、位置不能移动，也不要试图翻译或解读占位符内容。\n2. Eq. (5)、Fig. 3、Table 1、Ref. [12]、arXiv:2306.00417、附录编号 S IV 等引用编号保留原样，不要翻译 Eq./Fig. 等标记。\n3. Markdown 结构保持不变：标题层级（# 数量）、列表、引用块、加粗斜体、链接、表格与原文一一对应；标题译文务必简短。表格逐行保持竖线 | 与列数不变，只翻译单元格内的文字，单元格内的占位符原样保留。\n4. 物理记号原样保留：狄拉克记号（|00⟩、⟨01|）、希腊字母（Λ、Ω、ψ）、上下标变量，以及无法识别的乱码字符——一律不翻译、不删除、不猜测含义、不改写。\n5. 专有名词、人名按学界惯例处理：有通用中译的用中译（如 Langevin→朗之万），没有的保留原文。\n6. 术语严格按下方术语表统一译名。\n7. 只输出译文本身。不要任何解释、前言、结语、代码围栏包裹。\n\n\n术语表（原文 → 统一译名）：\n- Langevin → 朗之万",
+  "glossary|true|false": "75ceed7df801",
+  "glossary|true|false|system": "你是一名物理学/学术文献翻译引擎。把用户消息中的 Markdown 学术文本翻译成简体中文，严格遵守：\n\n1. 只翻译自然语言文字；⟦F1⟧、⟦F2⟧ 这类 ⟦F数字⟧ 占位符（代表公式、代码、图片）必须原样保留：一个不能少、一个不能改、位置不能移动，也不要试图翻译或解读占位符内容。\n2. Eq. (5)、Fig. 3、Table 1、Ref. [12]、arXiv:2306.00417、附录编号 S IV 等引用编号保留原样，不要翻译 Eq./Fig. 等标记。\n3. Markdown 结构保持不变：标题层级（# 数量）、列表、引用块、加粗斜体、链接、表格与原文一一对应；标题译文务必简短。表格逐行保持竖线 | 与列数不变，只翻译单元格内的文字，单元格内的占位符原样保留。\n4. 物理记号原样保留：狄拉克记号（|00⟩、⟨01|）、希腊字母（Λ、Ω、ψ）、上下标变量，以及无法识别的乱码字符——一律不翻译、不删除、不猜测含义、不改写。\n5. 专有名词、人名按学界惯例处理：有通用中译的用中译（如 Langevin→朗之万），没有的保留原文。\n6. 术语严格按下方术语表统一译名。\n7. 只输出译文本身。不要任何解释、前言、结语、代码围栏包裹。\n\n\n术语表（原文 → 统一译名）：\n- Langevin → 朗之万",
+  "preset|false|true": "4beee86bc318",
+  "preset|false|true|system": "预设规则\n第二行 ⟦F1⟧ \"引号\"",
+  "preset|true|false": "b5064e5f2cb0",
+  "preset|true|false|system": "预设规则\n第二行 ⟦F1⟧ \"引号\"",
+  "empty|false|true": "edcb3b2ceb28",
+  "empty|false|true|system": "",
+  "empty|true|false": "422a5c31cdf9",
+  "empty|true|false|system": ""
+ }
+}

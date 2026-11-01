@@ -11,7 +11,7 @@ const logPending = []; // log:line 事件到达太快时先排队
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const escAttr = (s) => esc(s).replace(/"/g, "&quot;"); // 用于 value="..." 属性位
+const escAttr = (s) => esc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;"); // 用于属性位（含单引号）
 const fileCode = (path) => {
   const base = path.split(/[\\/]/).pop().replace(/\.(md|pdf)$/i, "");
   const m = base.match(/^([A-Za-z]+\d+)/);
@@ -284,8 +284,11 @@ function renderQueue() {
   }).catch((e) => console.error("QueueList", e));
 }
 
+let rqTimer = null;
 function upsertTask(t) {
-  renderQueue();
+  // 进度事件高频：250ms 尾随防抖重绘（缓存即时更新，仅延后 DOM 重建）
+  if (rqTimer) clearTimeout(rqTimer);
+  rqTimer = setTimeout(() => { rqTimer = null; renderQueue(); }, 250);
 }
 
 function bindCardButtons() {
@@ -317,7 +320,7 @@ function bindCardButtons() {
       delete lastStageCount[b.dataset.remove];
       delete cardSeen[b.dataset.remove];
       renderQueue();
-    }));
+    }).catch((e) => showModal({ icon: "warn", title: "无法移除", body: esc(String(e)) })));
   });
   document.querySelectorAll("[data-startone]").forEach((b) => {
     if (b.dataset.bound) return;
@@ -877,9 +880,13 @@ function bindLog() {
     });
   });
   $("btn-clear-log").addEventListener("click", async () => {
-    await App.ClearLog();
-    logLines = [];
-    renderLog();
+    try {
+      await App.ClearLog();
+      logLines = [];
+      renderLog();
+    } catch (e) {
+      await showModal({ icon: "warn", title: "操作失败", body: esc(String(e)) });
+    }
   });
 }
 
@@ -892,6 +899,7 @@ function flushPending() {
 let pendingFlushTimer = null;
 function queueLog(line) {
   logLines.push(line);
+  if (logLines.length > 2000) logLines.splice(0, logLines.length - 2000); // 硬上限
   logPending.push(line);
   if (!pendingFlushTimer) {
     pendingFlushTimer = setTimeout(() => { pendingFlushTimer = null; flushPending(); }, 150);
@@ -933,6 +941,12 @@ function appendLog(line) {
 function showModal(opt) {
   return new Promise((resolve) => {
     const scrim = $("modal-scrim");
+    if (!scrim.hidden) {
+      // 防重入：已有模态时不再叠加（旧实例的键盘监听会把两个 promise
+      // 一起 resolve 并提前隐藏遮罩）。-1 = Esc 语义，调用方按取消处理
+      resolve(-1);
+      return;
+    }
     const ico = $("modal-ico"), title = $("modal-title"), body = $("modal-body"), btns = $("modal-btns");
     ico.className = "m-ico " + (opt.icon === "bad" ? "bad" : "warn");
     ico.textContent = opt.icon === "bad" ? "\u2715" : "!";

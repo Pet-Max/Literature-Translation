@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -54,8 +55,9 @@ type TaskQueue struct {
 	runner  func(*Task) error
 	notify  chan struct{}
 	paused  bool
-	soloID  string // 非空 = 单跑模式：只跑这一个任务，跑完即回到待开始
-	onIdle  func() // 每篇跑完后的回调（App 用于推送队列状态变化）
+	soloID  string        // 非空 = 单跑模式：只跑这一个任务，跑完即回到待开始
+	idSeq   atomic.Uint64 // 任务 ID 序列：防 UnixNano 同毫秒碰撞
+	onIdle  func()        // 每篇跑完后的回调（App 用于推送队列状态变化）
 }
 
 // NewTaskQueue 创建队列（调用 Worker 启动处理循环）。初始为待开始态。
@@ -137,7 +139,7 @@ func (q *TaskQueue) Add(kind, path, mode string) (Task, error) {
 		code = fmt.Sprintf("%d", time.Now().UnixNano()%100000)
 	}
 	t := &Task{
-		ID:         fmt.Sprintf("T%d", time.Now().UnixNano()),
+		ID:         fmt.Sprintf("T%d-%d", time.Now().UnixNano(), q.idSeq.Add(1)),
 		Code:       code,
 		Kind:       kind,
 		Mode:       mode,
@@ -316,9 +318,19 @@ func (q *TaskQueue) Worker(ctx interface{ Done() <-chan struct{} }) {
 					q.onIdle()
 				}
 			}
-			// 队列清空或被暂停：回到待开始态，新入队的任务等下一次「开始」
+			// 队列清空或被暂停：回到待开始态。复查 pending：收尾间隙
+			// 用户点「开始」不应被这里的覆盖吞掉
 			q.mu.Lock()
-			q.paused = true
+			hasPending := false
+			for _, t := range q.tasks {
+				if t.Status == StatusPending && (q.soloID == "" || t.ID == q.soloID) {
+					hasPending = true
+					break
+				}
+			}
+			if !hasPending {
+				q.paused = true
+			}
 			q.mu.Unlock()
 		}
 	}

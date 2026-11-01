@@ -1,0 +1,14 @@
+{
+ "hashes": {
+  "empty": "da39a3ee5e6b",
+  "hello": "aaf4c61ddcc5",
+  "cjk": "9746483f7201",
+  "multiline": "61cfbb745cd9",
+  "html_chars": "6f628c1d0b31",
+  "placeholder": "8e42107af222",
+  "long": "c068a1f54d77"
+ },
+ "cache_key": "rules-v1|model-gpt-x",
+ "jsonl": "{\"meta\": {\"key\": \"rules-v1|model-gpt-x\"}}\n{\"i\": 0, \"h\": \"5182c7053e65\", \"zh\": \"第一段译文：$E=mc^2$ 保留。\"}\n{\"i\": 1, \"failed\": \"占位符缺失 ⟦F2⟧\"}\n{\"i\": 2, \"h\": \"59236450a6ee\", \"zh\": \"第三段：⟦F1⟧ 回填后 <b>粗体</b> 保留。\"}\n{\"i\": 1, \"h\": \"5796a655b92f\", \"zh\": \"第二段重试成功：ΛΩψ。\"}\n",
+ "old_jsonl": "{\"i\": 0, \"zh\": \"旧版译文。\"}\n{\"i\": 1, \"failed\": \"占位符缺失 ⟦F1⟧\"}\n"
+}

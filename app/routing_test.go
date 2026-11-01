@@ -25,7 +25,8 @@ func TestQueueAddRouting(t *testing.T) {
 	pdf := writeTemp(t, dir, "any.pdf", "%PDF-1.4 fake")
 
 	newApp := func() *App {
-		a := &App{cfg: config.Default()}
+		a := &App{}
+		a.cfg.Store(config.Default())
 		a.queue = NewTaskQueue(func(*Task) error { return nil })
 		return a
 	}

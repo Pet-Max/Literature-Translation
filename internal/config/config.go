@@ -32,8 +32,9 @@ type LLM struct {
 	Concurrency int    `json:"concurrency"` // 并发段数，默认 3
 }
 
-// DefaultRules 系统默认翻译规则（与 engine/prompt.py 的 IRON_RULES 保持一致，
-// 一致性由 config_test 的 TestDefaultRulesMatchesPython 锁定）。
+// DefaultRules 系统默认翻译规则（与 v1.1.1 引擎 IRON_RULES 保持一致，
+// 引擎侧现值为 engine.IronRules；一致性由 config_test 的
+// TestDefaultRulesMatchesEngine 锁定）。
 // 作为「默认」预设的初始文案，也是「恢复默认」按钮的还原源。
 const DefaultRules = "你是一名物理学/学术文献翻译引擎。把用户消息中的 Markdown 学术文本翻译成简体中文，严格遵守：\n\n" +
 	"1. 只翻译自然语言文字；⟦F1⟧、⟦F2⟧ 这类 ⟦F数字⟧ 占位符（代表公式、代码、图片）必须原样保留：一个不能少、一个不能改、位置不能移动，也不要试图翻译或解读占位符内容。\n" +
@@ -245,14 +246,22 @@ func envAny(names ...string) string {
 
 // applyEnv 凭据字段：环境变量/注册表优先于配置文件（12-factor 惯例），
 // 这样 setx 之后无需清理配置文件残留值即可生效。
+var (
+	envTokenSnap string // env 注入的 Token 原值：Save 时未变更则不落盘
+	envKeySnap   string // env 注入的 APIKey 原值：同上
+)
+
 func applyEnv(cfg *Config) {
 	if v := envAny("MINERU_TOKEN", "MINERU-TOKEN", "MINERU_API_TOKEN"); v != "" {
 		cfg.MinerU.Token = v
+		envTokenSnap = v
 	} else if v := regUserEnv("MINERU_TOKEN", "MINERU-TOKEN", "MINERU_API_TOKEN"); v != "" {
 		cfg.MinerU.Token = v
+		envTokenSnap = v
 	}
 	if v := envAny("LLM_API_KEY", "OPENAI_API_KEY"); v != "" {
 		cfg.LLM.APIKey = v
+		envKeySnap = v
 	}
 	if v := envAny("LLM_BASE_URL", "OPENAI_BASE_URL"); v != "" {
 		cfg.LLM.BaseURL = v
@@ -288,7 +297,8 @@ func MustLoad() *Config {
 
 // Save 写回配置文件（自动创建目录）。
 func (c *Config) Save() error {
-	c.Normalize()
+	cc := *c
+	cc.Normalize()
 	p, err := Path()
 	if err != nil {
 		return err
@@ -296,15 +306,51 @@ func (c *Config) Save() error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return fmt.Errorf("创建配置目录失败: %w", err)
 	}
-	data, err := json.MarshalIndent(c, "", "  ")
+	// env 注入且未被用户改动的凭据不落盘（保持「密钥不落盘」意图）；
+	// 用户显式改过（值 ≠ env 快照）→ 落盘新值
+	if disk, derr := readDiskCreds(p); derr == nil {
+		if envTokenSnap != "" && cc.MinerU.Token == envTokenSnap {
+			cc.MinerU.Token = disk.MinerU.Token
+		}
+		if envKeySnap != "" && cc.LLM.APIKey == envKeySnap {
+			cc.LLM.APIKey = disk.LLM.APIKey
+		}
+	}
+	data, err := json.MarshalIndent(&cc, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0o644)
+	// temp + rename 原子写：崩溃不留半截 JSON（半截会被静默回退默认，
+	// 用户随后一次保存即以默认覆盖全部配置）
+	tmp := p + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, p); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// readDiskCreds 读磁盘配置中的凭据字段（env 不落盘逻辑用）。
+func readDiskCreds(p string) (Config, error) {
+	var d Config
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return d, err
+	}
+	if err := json.Unmarshal(data, &d); err != nil {
+		return d, err
+	}
+	return d, nil
 }
 
 // normalize 修正越界与空值。
 func (c *Config) Normalize() {
+	if c.Glossary == nil {
+		c.Glossary = []Term{}
+	}
 	// 旧版默认字体栈迁移到中西文配对版（自定义栈不动）
 	if c.Export.Font == `"LXGW WenKai", "Microsoft YaHei", sans-serif` {
 		c.Export.Font = Default().Export.Font

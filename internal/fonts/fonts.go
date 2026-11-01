@@ -176,6 +176,9 @@ func Import(path, destFileName string) (Info, error) {
 
 // Remove 从字体库删除文件（config 里的注册由调用方清理）。
 func Remove(fileName string) error {
+	if fileName == "" || fileName != filepath.Base(fileName) || fileName == "." || fileName == ".." {
+		return fmt.Errorf("非法字体文件名: %q", fileName)
+	}
 	dir, err := Dir()
 	if err != nil {
 		return err

@@ -1,0 +1,895 @@
+Finite-time thermodynamic process of a two-level
+quantum heat engine
+Yigermal Bassie a,Tibebe Birhanub, Yoseph Abebe c and Admasu Abawarid
+aDepartment of Physics, Wolkite University, Wolkite, Ethiopia.
+bDepartment of Physics, University of Gondar, Gondar, Ethiopia.
+cDepartment of Physics, Debre Markos University, Debre Markos, Ethiopia.
+dDepartment of Physics, Addis Ababa University, Addis Ababa, Ethiopia.
+July 5, 2022
+Abstract
+In this paper, we consider a model of two-level quantum heat engine to investigate the explicit
+analytic expression for the thermodynamics quantities in different condition under the finite-time
+operation. In this engine, the working substance is composed of a spin-half particles immersed in
+a magnetic field.
+The finite-time thermodynamic processes consisting of two quantum adiabatic
+and two quantum isothermal processes. This processes working between two heat reservoirs with
+an inverse temperatures β1 and β2 (< β1). In this processes, we obtain the work, heat, power and
+efficiency at maximum power output of the model. Our result of the efficiency at maximum power
+agree with the universal value in the first order of Carnot efficiency.
+keywords Quantum heat engine, efficiency at maximum power, two-level system, finite-time processes
+A finite-time process in thermodynamics is a pro-
+cess that transforms a given initial state into a
+given final state in a finite amount of time. This
+process is optimal if it produces the lowest amount
+of entropy production.
+The condition of a fi-
+nite time is crucial, because quasi-static processes,
+which require infinitely slow driving, do not gener-
+ate any entropy at all. Such processes have been
+studied in macroscopic systems under the realm of
+finite-time thermodynamics. [1]. For small systems
+in contact with a thermal environment and thus fol-
+lowing a stochastic dynamics, optimal finite-time
+processes were shown to have an inevitable ther-
+modynamic cost that scales asymptotically like the
+inverse of the allocated time [2], [3]. This scaling
+was later shown to be the exact minimal entropy
+production for any finite time for an underlying
+Langevin dynamics [4], [5]. For system with dis-
+crete state space undergoing a master equation dy-
+namics, this scaling holds asymptotically as several
+case studies have shown [6], [7], [8]. In the linear
+response regime, an appealing systematic theory
+for the optimal driving involves geometric concepts
+like the thermodynamic length [9], [10], [11]. For an
+effective two-state system, a prominent experimen-
+tal application of optimal protocols is the minimal
+cost of erasing a bit in a finite-time extension of
+the Landauer bound [11], [12], [13].
+The concept of thermodynamics has been devel-
+oped from the analysis of heat engines perfor-
+mance. Carnot invented an idealized mathemat-
+ical model of heat engines called the Carnot cycle
+and proved that there exists a maximum efficiency
+of all heat engines, which is given by Carnot effi-
+ciency. This efficiency is a central cornerstone of
+thermodynamics. It states that the efficiency of a
+reversible Carnot heat engine attain the maximum
+possible work for a given temperature of the hot
+(Th) and cold (Tc) reservoirs but generates zero
+power because it is an infinitely slow operation.
+1
+arXiv:2207.00867v1  [cond-mat.stat-mech]  2 Jul 2022
+
+The efficiency (ηc = 1 −Tc
+Th) of the Carnot cycle
+is the upper bound on the efficiency at which real
+heat engines are unrealistically high. The practi-
+cal implications are more limited, since the upper
+limit ηc is only reached for engines that operate re-
+versibly. One of the important questions is what
+will be the efficiency at maximum power of a sys-
+tem that operating in finite time.
+In a ground-
+breaking work, Curzon and Ahlborn [14] obtained
+this efficiency for the Carnot engine by optimiz-
+ing the Carnot cycle with respect to power rather
+than efficiency, which is given by Curzon–Ahlborn
+efficiency, ηCA
+ηCA = 1 −
+r
+Tc
+Th
+= ηc
+2 + η2
+c
+8 + ϑ(η3
+c).
+(1)
+This efficiency used to seek a more realistic upper
+bound on the efficiency of a heat engine in the en-
+doreversible approximation [14], [15] (taking into
+account the dissipation only in the heat transfer
+process).
+Currently, it has been shown that the
+Curzon-Ahlborn efficiency is an exact consequence
+of linear irreversible thermodynamics when oper-
+ating under conditions of strong coupling between
+the heat flux and the work [16], [17], [18].
+The
+value of 1/2 for the linear coefficient in Eq. 1 is
+therefore universal for such systems.
+In this paper we consider a two-level quantum sys-
+tem with excited (ground) states and with its corre-
+sponding eigen-energy values. Such a system mod-
+elled as a spin-half particle in an external magnetic
+field.
+It is in contact with a two thermal reser-
+voirs having different inverse temperature β1 and
+β2. The system absorbs heat from the hot reservoir
+(β1), do some mechanical work and releases the re-
+maining heat to the cold reservoir (β2). We derive
+analytical expression for the heat absorbed(and re-
+leased), work done by (and on) per cycle and the
+efficiency of a system in a finite time. Furthermore,
+we explore the behavior of efficiency at maximum
+power as a function of the Carnot efficiency.
+The rest of this paper is organized as follow. In
+Sec.(1), the model of the system is introduced.
+In Sec.(2) the first law of thermodynamics of
+the model under finite-time operation explained
+and thermodynamics quantities also obtained. In
+Sec.(3) the cyclic process of the the mode of op-
+eration described and the condition for finite-time
+processes is discussed. Section (4) analyses the ef-
+ficiency at maximum power of the model as a func-
+tion of Carnot efficiency, ηc. In Sec.(5), we sum-
+marize and conclude.
+1
+The model
+We consider a two-level quantum system can be
+modelled as a spin-half particle in an external
+magnetic field.
+In this system, a working sub-
+stance consisting of many non interacting spin-half
+particles and a cycle of engine have two isother-
+mal branches connected by two adiabatic branches,
+none of which are assumed reversible. Each of the
+spin-half particle is thermally coupled to a heat
+bath of constant inverse temperature of the hot
+reservoir (β1) and cold reservoir(β2).
+When the
+system is coupled to a thermal bath and the Hamil-
+tonian is fixed in time, the bath can change the
+populations of the energy levels. In a steady state,
+the system reaches a Gibbs state, where the popu-
+lation of the levels is given by [19]
+Pn,b =
+e
+−En
+Tb
+Pn
+n=1 e
+−En
+Tb
+,
+(2)
+where n is the number of levels and b stands
+for cold and hot temperature reservoir.
+In next
+section, we explore the Quantum thermodynamic
+processes of the model and evaluate its thermo-
+dynamic quantities such as work, internal energy,
+heat and entropy.
+2
+
+2
+Quantum
+thermodynamic
+process:
+first law of ther-
+modynamics
+Consider our two-level system as a spin-half parti-
+cle in the presence of an external time dependent
+magnetic field. The spin-half particles under this
+field can have two possible discrete energy states
+values.
+Since their magnetic moment prefers to
+line up either parallel or anti-parallel with the field.
+This system is placed in contact with a heat reser-
+voir having a constant temperature β. The system
+average (internal) energy can be expressed as
+⟨E⟩=
+X
+r
+PrEr,
+(3)
+where Pr is the probability of finding the system
+in a microstate r with energy Er. An infinitesimal
+change d⟨E⟩, in the mean energy can arise in two
+ways: either (i) in the infinitesimal change in en-
+ergy level dEr caused by change in external field
+at constant probability in Pr (this is carried out
+instantaneously by detaching the system from the
+reservoir) or (ii) in the infinitesimal change in prob-
+ability, dPr, caused by heat exchange of the system
+with the reservoir at constant external field. In case
+(i) work will be done by (on) the system depending
+on the direction of the path. In case (ii) heat will
+be absorbed (or released) by the system depending
+on the direction of the path. In thermodynamics,
+putting the conservation of energy mathematically
+as,
+d⟨E⟩=
+X
+r
+[PrdEr + ErdPr] = d¯W + d¯Q,
+(4)
+where d¯W
+= P
+r PrdEr = P ed∆is the mean
+path dependent work done by (on) the system,
+and d¯Q = P
+r ErdPr = ∆dP e is the mean path
+dependent heat absorbed (released) by the system.
+Note that: ∆and P e is the energy gap between the
+ground state and the excited state and the proba-
+bility of getting the spin-half particle in the excited
+state of the system , respectively and slash on d in
+Eq.(4) signifies the path-dependence nature of the
+process.
+We determine the entropy as
+S = −
+X
+r
+Pr ln Pr.
+(5)
+Finally, using d¯Q = P
+r ErdPr and Eq.
+(5) we
+arrived
+dS = d¯Q
+T hh
+(6)
+This relation expressed in Eq. (6) holds only for
+quasi-static processes. For in the case of finite and
+irreversible processes, it can be additional contri-
+butions to the change in entropy.
+Figure 1: Model heat engine working between two
+reservoirs at different temperature for finite-time
+process. Here the horizontal axis P e is the occupa-
+tion probability in the excited state of the two-level
+system, and the vertical axis indicates the level
+spacing of the two-level system. Zig-zag segments
+represent the finite-time process and broken curves
+represent quasistatic isothermal processes.
+β1 is
+the inverse temperature of the reservoir at higher
+temperature; whereas β2 is the inverse temperature
+of the reservoir at lower temperature.
+3
+
+3
+Cyclic finite-time process
+of the system
+We have consider the finite-time operation of a
+quantum heat engine whose working substance is
+composed of a two-level system. The engine cycle,
+consisting of two types of processes and working
+between two heat reservoirs at different tempera-
+tures. We are taking a system of spin-half particles,
+that are positioned in a fixed space like atoms in a
+crystal far enough apart to be very weakly interact-
+ing with each other. The system is subjected to an
+external magnetic field. Depending on the kind of
+process to which it is subjected, the system could
+be attached to a thermal reservoir or detached from
+it and undergo a change in the field. For example,
+if the system is exposed to in thermal contact with
+a heat reservoir of inverse temperature β(=
+1
+kBT )
+and let to quasistically change from state A to B,
+it will trace the isothermal path defined by the re-
+lation
+β∆= ln
+1 −pe
+pe
+
+(7)
+as shown in Fig.(1). Here ∆(= 2µB) is the energy
+gap between the ground state and the excited state
+of a spin-half particle (of magnetic moment µ ) im-
+mersed in an external magnetic field of strength B
+while P e is the probability of getting the spin-half
+particle in the excited state when it is in thermal
+contact with a heat bath at β.
+Let us now dis-
+cuss each individual branch of finite-time thermo-
+dynamic process.
+3.1
+Isothermal branch in the finite-
+time process
+The two-level quantum heat engine under finite-
+time operation in the isothermal branch can be de-
+scribed by using the change of energy levels and the
+number of spin-half particles in the energy state.
+The two modes of operations in a finite-time pro-
+cess of the system are clearly shown in the Fig.
+(1). The first one is an adiabatic change that takes
+place at constant occupation probability of the ex-
+cited state.
+This process involves detaching the
+system from a reservoir and changing the exter-
+nal magnetic field in a very short time so that only
+work is done by(on) system; no heat exchange takes
+place. The second mode of operation in a finite-
+time process takes place at constant external mag-
+netic field. The detached system from the reservoir
+during the adiabatic change is attached back to the
+reservoir during this process. This is a slow pro-
+cess that takes relatively much longer time than
+the adiabatic change. It proceeds until the system
+and the reservoir equilibrate. Once the system and
+the reservoir are in thermal equilibrium, then the
+first mode of operation takes place followed by the
+second. These alternate modes of operations occur
+for a finite number of times which ultimately take
+the system to a desired final state in a finite time.
+As an illustration shown in Fig.(1), we consider two
+infinitesimal successive processes where the system
+(i) at first goes from state 2 to state 3 by detach-
+ing it from reservoir such that the external field
+infinitesimally decreased keeping the system prob-
+ability fixed followed by (ii) a state change from
+3 to 4 such that the probability changes infinitesi-
+mally while keeping the external field constant. At
+the end of the second process the system has moved
+to another state along the isothermal path. In pro-
+cess 2 →3, system does work. On the other hand,
+in the reverse process 3 →2 work is done on the
+system. In process 3 →4, system absorbs heat,
+while in process 4 →3 the system released heat.
+Note that states 2 and 4 are lying on the isothermal
+path. process 1 →2 is an instantaneous process,
+while process 3 →4 takes finite time since the sys-
+tem is attached back to β1 and left there until it
+equilibrates with reservoir β1.
+In the finite-time process, the spin-half system is
+connected to the hot reservoir (A to B) with in-
+verse temperature β1 or the cold reservoir (C to D)
+with inverse temperature β2 in the instant time is
+depicted in Fig.(1). We have considered that the
+initial state (P e
+A, ∆A) reaches in thermal equilib-
+rium within the hot reservoir at inverse tempera-
+4
+
+ture β1, when the spin-half system is connected to
+hot reservoir. When the initial state (P e
+A, ∆A) de-
+taches from the hot reservoir, the number of spin-
+half particles in the exited state remains constant
+in the first mode of operation, and the change in
+energy level decreases from ∆A to ∆1 in a very fast
+manner. During this abrupt change in energy lev-
+els, the system can extract work, with the amount
+of work done by the system defined as
+WA→1 = P e
+A[∆1 −∆A].
+(8)
+Using similar ways, the amount of work done by
+the system in the isothermal processes of A to B
+can be expressed as
+W2→3 = P e
+2 [∆3 −∆2],
+and
+W4→5 = P e
+4 [∆5 −∆4].
+(9)
+Therefore, the net work done by a two-level quan-
+tum heat engine in the isothermal processes of A
+to B is given by
+WA→B = −∆[P e
+A + P e
+2 + P e
+4 ],
+(10)
+where ∆= ∆A−∆B
+n
+, n is the number of subdivision.
+In the second mode of operation, the change of
+energy level ∆1 remains constant and the systems
+is allowed to exchange heat until it relaxes back
+to thermal equilibrium at state 2, when the system
+attached to the reservoir. During this process (1 to
+2), as seen in the Fig. (1), the systems is allowed
+to absorbed a certain amount of heat
+Q1→2 = ∆1[P e
+2 −P e
+1 ],
+(11)
+with the hot reservoir β1. This absorbed heat in-
+creases the number of spin-half particles from the
+exited state 1(P e
+1 , 1) to the exited state 2 (P e
+2 , 2).
+Using similar fashion, the amount of absorbed heat
+during in the isothermal processes of A to B can
+be obtained as
+Q3→4 = ∆4[P e
+4 −P e
+3 ],
+and
+Q5→B = ∆B[P e
+B −P e
+5 ].
+(12)
+The total amount of heat absorbed by the two-level
+quantum heat engine in the isothermal processes of
+A to B is given by
+QA→B = ∆BP e
+4 −∆AP e
+A + ∆[P e
+A + P e
+2 + P e
+4 ]. (13)
+During this finite-time process (A to B ), the ab-
+sorbed heat is positive, where as work done by the
+system is negative since the system looses its inter-
+nal energy.
+In the other branch of isothermal process of C to
+D as depicted in Fig.(1), when the systems allows
+to exchange heat with the cold reservoir at a in-
+verse temperature β2, after the end of adiabatic
+process of B to C but thermal equilibrium should
+be reached within the cold reservoir before the next
+adiabatic change begins, when the number of spin-
+half particles in the excited state decreases. By in-
+creasing the external magnetic field adiabatically,
+it is possible to increase the energy level of the sys-
+tem from ∆C to ∆6 and further continue to the
+processes 6 →7, 8 →9, and 10 →D while in-
+termittently attaching to the cold reservoir tem-
+perature, TC in between. Again the first mode of
+operation, the number of spin-half particles in the
+exited state is constant and the change of energy
+level increase from ∆c to ∆6 in a very fast manner,
+after the system left to exchange heat with the cold
+reservoir and reached in thermal equilibrium, when
+state (P e
+C, ∆C) detach from the cold reservoir. Dur-
+ing this sudden change of energy levels the system
+can allows extract work, this amount of work done
+on the system defined as
+W6→C = P C
+e [∆6 −∆c].
+(14)
+Likewise, we can obtained the amount of work done
+by the system in the adiabatic processes (C →D)
+can be expressed as
+W7→8 = P e
+7 [∆8 −∆7],
+and
+W9→10 = P e
+9 [∆10 −∆9].
+(15)
+The work done on the system in the isothermal
+processes C →D is expressed by
+WC→D = ∆
+′[P e
+7 + P e
+9 + P e
+c ],
+(16)
+5
+
+where ∆′ = ∆D−∆C
+n
+, n is the number of subdivision.
+In the second mode of operation, the change of
+energy level ∆6 constant and the systems is allows
+to exchange heat until it relaxes back to thermal
+equilibrium at state 7, when the system attach to
+the cold reservoir. During this process(6 →7), the
+systems is allowed to exhange spin-half particles in
+the exited state due to released the amount of heat,
+Q6→7
+Q6→7 = ∆6[P e
+7 −P e
+6 ],
+(17)
+when it attaches to the cold reservoir. This lost
+heat decreases the number of spin-half particles
+from the exited state 6(P 6
+e ) to the exited state
+7 (P 7
+e ).
+Correspondingly, we can obtained the
+amount of releavolumesed heat during in the iso-
+choric processes of C →D, which can be expressed
+as
+Q8→9 = ∆8[P 9
+e −P 8
+e ],
+and
+Q10→D = ∆D[P D
+e −P 10
+e ].
+(18)
+The total heat released in the finite-time process of
+C →D becomes
+QC→D = ∆DP e
+D −∆CP e
+C −∆
+′[P e
+C +P e
+7 +P e
+9 ]. (19)
+In this finite-time process (C →D), the released
+heat is negative, where as work done on the system
+is positive.
+3.2
+Adiabatic branch of the process
+When the system reaches state B, (P e
+B, ∆B), then
+it detached from the hot reservoir at a inverse tem-
+perature, β1 and instantaneously connected to the
+cold reservoir at a inverse temperature, β2. Simul-
+taneously, the energy level spacing of the system
+instantly changes from ∆B to ∆C. However, the
+number of none-interacting spin-half particles in
+the excited state of the system remains unchanged
+(i.e P e
+B = P e
+C). During this branch of operation,
+there is no heat exchange between the system and
+the reservoirs. So that, the amount of work done
+by the system is described by
+WB→C = P e
+B[∆C −∆B].
+(20)
+The other adiabatic process of the system occurs,
+when the system reaches state D (P e
+D, ∆D), then
+it detached from the cold reservoir at a tempera-
+ture, β2 and instantaneously connected to the hot
+reservoir at a inverse temperature, β1. Simultane-
+ously, the energy level spacing of the system in-
+stantly changes from ∆D to ∆A without change of
+the number of none-interacting spin-half particles
+in the excited state of the system (i.e P e
+D = P e
+A).
+The amount of work done on the system during
+this branch described by
+WD→A = P e
+A[∆A −∆D].
+(21)
+After the end of adiabatic processes D to A
+instantly the system returns back to initial state,
+(P D
+e , ∆A ) in one completed cycle.
+The net amount of heat and work done per cycle,
+respectvely given by
+Qnet = ∆BP e
+4 −∆AP e
+A + ∆[P e
+A + P e
+2 + P e
+4 ]
++ ∆DP e
+D −∆CP e
+C −∆
+′[P e
+C + P e
+7 + P e
+9 ].
+(22)
+Wnet = (∆C −∆B)P e
+B[1 + (∆A −∆D)P e
+A
+(∆C −∆B)P e
+B
+]+
+∆
+′P e
+C −∆P e
+A + (∆
+′ −∆)(P e
+2 + P e
+4 ).
+(23)
+The corresponding efficiency of the two-level quan-
+tum heat engine can be expressed as the ratio of
+the net work done per cycle to the input heat per
+cycle, which is given by
+η =
+(∆B −∆C)P e
+B[1 −
+(∆A−∆D)P e
+A
+(∆B−∆C)P e
+B ]
+∆BP e
+B −∆AP e
+A + ∆(P e
+A + P e
+2 + P e
+4 ).
+−Delta
+′P e
+C + ∆P e
+A −(∆
+′ −∆)(P e
+2 + P e
+4 )
+∆BP e
+B −∆AP e
+A + ∆(P e
+A + P e
+2 + P e
+4 ) .
+(24)
+The efficiency (described in Eq. (23)) of a two-level
+quantum engine cycle process depends on probabil-
+ities of the ground and exited state of the system
+and the change of energy levels.
+6
+
+The Power of the two-level quantum heat engine
+can be expressed as,
+P(t) = −Wnet
+t
+.
+(25)
+The negative sign in Eq.(25) expressed that work
+is done by the engine, because power is extract
+or something needs get out of the system. Then,
+inserting Eqs. (23) into (25), the power of the two-
+level quantum heat engine can be rewritten as,
+P(t) =
+(∆B −∆C)P e
+B[1 −
+(∆A−∆D)P e
+A
+(∆B−∆C)P e
+B ]
+t
+−{(∆D −∆C)P e
+C −(∆A −∆B)P e
+A}
+t2
+−{(∆D −∆C −∆A + ∆B(P e
+2 + P e
+4 )}
+t2
+,
+(26)
+where ∆= ∆A−∆B
+n
+and ∆′ = ∆D−∆C
+n
+, n is the num-
+ber of subdivision i.e.n ∝t.
+Furthermore, Eqs.
+(24) and (26) show that the efficiency and power
+output are both as a function of P n
+b and ∆b . There-
+fore, we can generate the curves of power output
+with respect to the efficiency by varying P n
+b and
+∆b . In Fig. (2) shows the plot of efficiency as a
+0
+0.5
+1
+1.5
+2
+2.5
+P
+0
+10
+20
+30
+40
+50
+60
+η
+Figure 2: The plot of efficiency vs power of the
+model, when β1 = 0.8, β2 = 1.5, Pa = 0.2, Pb =
+0.34, P2 = 0.28 and P4 = 0.32
+function of power output. The efficiency increases
+with the increasing of power output.
+At an op-
+timal value of power, the efficiency becomes maxi-
+mum and monotonically decreasing with increasing
+power. It means that in order to improve the en-
+gine’s efficiency, the cost is to decrease the engine’s
+power output, and vice versa. Therefore, this kind
+of trade-offbetween the efficiency and power out-
+put should be concerned when the engine is work-
+ing at the lower bound of the region.
+4
+Efficiency
+at
+maximum
+power of the model
+In this section, we study the efficiency at maximum
+power of the model and compare with that of the
+Curzon-Alborn efficiency. In order to maximize the
+output power of the model with respect to the time,
+we need to solve
+∂P(t)
+∂t
+|tmp= 0.
+(27)
+Then, using Eqs. (27) and (26), we get
+tmp = 2Γ
+χ ,
+(28)
+where χ = (∆B −∆C)P B
+e [1 −
+(∆A−∆D)P e
+A
+(∆B−∆C)P B
+e ] and
+Γ = (∆D −∆C)P C
+e −(∆A −∆B)P e
+A + (∆D −∆C −
+∆A + ∆B)(P 2
+e + P 4
+e ). The efficiency at maximum
+power (ηmp) of the two-level quantum heat engine
+becomes
+ηmp = ηC
+2
+1
+1 + ηC
+2
+ϕ
+Γ
+,
+(29)
+where ϕ = (∆A −∆B)(P e
+A + P 2
+e + P 4
+e ).
+In Fig.
+(3), we plot the efficiency at maximum
+power as a functions of ηC with the parameter
+choice Γ = −0.070 and ϕ = 0.088.
+In the lin-
+ear regime, our result agree with the ηCA. But in
+the higher order of ηC, the efficiency at maximum
+power lies below the ηCA.
+The efficiency at maximum power of Eq.(29) of the
+model can be rewritten as
+ηmp = ηc
+2 −ϕη2
+c
+4Γ + ϕ2η3
+c
+8Γ2 −ϕ3η4
+c
+16Γ3 + ϑ(η5
+c).
+(30)
+7
+
+0
+0.2
+0.4
+0.6
+0.8
+1
+ηC
+0
+0.2
+0.4
+0.6
+0.8
+1
+η
+ηC
+ηCA
+ηmp
+Figure 3: The plot of efficiency at maximum power
+of the model vs Carnot efficiency
+This expression result agree with the universal
+value for the efficiency at maximum power [20–24]
+similar to that of Carnot efficiency of the heat en-
+gines, when ϕ
+Γ = −0.5 value.
+5
+Summary and Conclusion
+In this work, we have taken a simple model of a
+two-level quantum heat engine. The spin-half par-
+ticle consider as a working substance in the pres-
+ence of external magnetic field. We have investi-
+gated the thermodynamic properties of the two-
+level quantum heat engine in the fine time con-
+dition such as heat, power and efficiency per cy-
+cle. The work per engine cycle takes the maximum
+value in the limit where the time intervals of the
+isothermal processes tend to infinity. The efficiency
+at maximum power evaluated and the coefficient
+of the linear term for the efficiency at maximum
+power is 1
+2.
+In conclusion, the result of our model agrees with
+the universality value of the efficiency at maximum
+power up to the first order in ηc while in the higher
+order of ηC, the efficiency at maximum power lies
+below the ηCA.
+Acknowledgments:
+Y.B.
+would
+like
+to
+thank
+Wolkite University for financial support during his
+work.
+Author contributions
+YB conception and design of study. YB and TB
+performed the analytic calculations and numerical
+results.
+YB, TB,YA, and AA analysing and
+interpreting the results.
+YB, TB, YA, and AA
+drafted manuscript preparation.
+All authors
+reviews the results and approved the final version
+of the manuscript.
+Funding: The authors declare that they have no
+known competing financial interests.
+Conflict of Interest:
+The authors declare no
+conflict of interest.
+Data Availability Statement
+This manuscript has no associated data or the data
+will not be deposited.
+References
+[1] B. Andresen, Angewandte Chemie Interna-
+tional Edition 50(12), 2690 (2011)
+[2] K. Sekimoto, S.i. Sasa, Journal of the Physical
+Society of Japan 66(11), 3326 (1997)
+[3] T. Schmiedl, U. Seifert, Physical review letters
+98(10), 108301 (2007)
+[4] T. Schmiedl, U. Seifert, EPL (Europhysics
+Letters) 81(2), 20003 (2007)
+[5] E. Aurell, C. Mejia-Monasterio, P. Muratore-
+Ginanneschi,
+Physical
+Review
+E
+85(2),
+020103 (2012)
+8
+
+[6] M.
+Esposito,
+R.
+Kawai,
+K.
+Lindenberg,
+C. Van den Broeck, EPL (Europhysics Let-
+ters) 89(2), 20003 (2010)
+[7] G. Diana, G.B. Bagci, M. Esposito, Physical
+Review E 87(1), 012111 (2013)
+[8] P.R. Zulkowski, M.R. DeWeese, Physical Re-
+view E 89(5), 052140 (2014)
+[9] G.E. Crooks, C. Jarzynski, Physical Review E
+75(2), 021116 (2007)
+[10] D.A. Sivak, G.E. Crooks, Physical review let-
+ters 108(19), 190602 (2012)
+[11] D.A. Sivak, G.E. Crooks, Physical Review E
+94(5), 052106 (2016)
+[12] Y. Jun, M. Gavrilov, J. Bechhoefer, Physical
+review letters 113(19), 190601 (2014)
+[13] K. Proesmans, J. Ehrich, J. Bechhoefer, Phys-
+ical Review Letters 125(10), 100602 (2020)
+[14] F.L. Curzon, B. Ahlborn, American Journal
+of Physics 43(1), 22 (1975)
+[15] H.B. Callen. Thermodynamics and an intro-
+duction to thermostatistics 2nd edition, john-
+wiley & sons (1985)
+[16] C. Van den Broeck, Physical Review Letters
+95(19), 190602 (2005)
+[17] B.J. De Cisneros, A.C. Hern´andez, Physical
+Review Letters 98(13), 130602 (2007)
+[18] A. Gomez-Marin, J.M. Sancho, Physical Re-
+view E 74(6), 062102 (2006)
+[19] J. Wang, J. He, Z. Wu, Physical Review E
+85(3), 031145 (2012)
+[20] T. Schmiedl, U. Seifert, EPL (Europhysics
+Letters) 83(3), 30005 (2008)
+[21] Z. Tu, Journal of Physics A: Mathematical
+and Theoretical 41(31), 312003 (2008)
+[22] M. Esposito, K. Lindenberg, C. Van den
+Broeck, EPL (Europhysics Letters) 85(6),
+60010 (2009)
+[23] A.E. Allahverdyan, R.S. Johal, G. Mahler,
+Physical Review E 77(4), 041118 (2008)
+[24] Y. Izumida, K. Okuda, EPL (Europhysics Let-
+ters) 97(1), 10004 (2012)
+9

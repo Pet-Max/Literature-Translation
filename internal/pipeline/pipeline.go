@@ -5,11 +5,11 @@ package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"literature-translation/internal/config"
@@ -17,6 +17,7 @@ import (
 	"literature-translation/internal/export"
 	"literature-translation/internal/fonts"
 	"literature-translation/internal/mineru"
+	"literature-translation/internal/pdftext"
 	"literature-translation/internal/render"
 	"literature-translation/internal/repair"
 )
@@ -51,18 +52,14 @@ func (p *Pipeline) stage(name string) {
 
 // Pipeline 核心编排器。Cfg 为共享指针——GUI 修改配置后原地生效。
 type Pipeline struct {
-	Cfg       *config.Config
-	EngineDir string
-	CB        Callbacks
+	Cfg *config.Config
+	CB  Callbacks
 }
 
-// New 创建编排器并定位翻译引擎目录。
+// New 创建编排器。翻译引擎为进程内 Go 实现（自 v1.1.1 引擎母本移植），无需定位边车；
+// 保留 error 签名以兼容既有调用方。
 func New(cfg *config.Config, cb Callbacks) (*Pipeline, error) {
-	engDir, err := findEngineDir()
-	if err != nil {
-		return nil, err
-	}
-	return &Pipeline{Cfg: cfg, EngineDir: engDir, CB: cb}, nil
+	return &Pipeline{Cfg: cfg, CB: cb}, nil
 }
 
 func (p *Pipeline) logf(format string, a ...any) {
@@ -77,11 +74,9 @@ func (p *Pipeline) warnf(format string, a ...any) {
 	}
 }
 
-// SegmentFailure 最终翻译失败的段落。
-type SegmentFailure struct {
-	I       int    `json:"i"`
-	Reasons string `json:"reasons"`
-}
+// SegmentFailure 最终翻译失败的段落（engine.SegmentFailure 的别名：
+// 两域共用一份定义，省去逐字段转换）。
+type SegmentFailure = engine.SegmentFailure
 
 // Result 一次翻译/导出的产物信息。
 type Result struct {
@@ -95,20 +90,15 @@ type Result struct {
 	Warnings       []string         `json:"warnings"`
 }
 
-// Check 预检：配置完整性 + Python 引擎 + Edge。
+// Check 预检：配置完整性 + 内置 Go 引擎自检 + Edge。
 func (p *Pipeline) Check() error {
 	for _, m := range p.Cfg.ValidateAndReport() {
 		p.warnf("%s", m)
 	}
-	sup, err := p.startSupervisor()
-	if err != nil {
-		return err
+	if err := engine.SelfCheck(); err != nil {
+		return fmt.Errorf("引擎自检失败: %v", err)
 	}
-	defer sup.Stop()
-	if err := sup.Ping(); err != nil {
-		return fmt.Errorf("引擎 ping 失败: %v", err)
-	}
-	p.logf("引擎: OK（%s）", p.EngineDir)
+	p.logf("引擎: OK（内置 Go 引擎）")
 	edge, err := export.FindEdge()
 	if err != nil {
 		return err
@@ -116,26 +106,6 @@ func (p *Pipeline) Check() error {
 	p.logf("Edge: %s", edge)
 	p.logf("✓ 预检完成")
 	return nil
-}
-
-// startSupervisor 拉起 Python 翻译引擎。引擎 stderr（切段数、断点复用、
-// 校验未过原因、收尾补翻过程等诊断日志）按行转发到日志回调——此前传 nil
-// 全部丢弃，排障时无过程信息可看。
-func (p *Pipeline) startSupervisor() (*engine.Supervisor, error) {
-	return engine.Start(p.EngineDir, stderrForwarder{p})
-}
-
-// stderrForwarder 把引擎 stderr 按行转发到日志（exec 对 stderr 单 goroutine
-// 拷贝，Write 串行到达，无需加锁；引擎侧 PYTHONUNBUFFERED=1 保证整行写入）。
-type stderrForwarder struct{ p *Pipeline }
-
-func (f stderrForwarder) Write(b []byte) (int, error) {
-	for _, line := range strings.Split(strings.TrimRight(string(b), "\r\n"), "\n") {
-		if strings.TrimSpace(line) != "" {
-			f.p.warnf("%s", line)
-		}
-	}
-	return len(b), nil
 }
 
 // RunPDF 全流程：MinerU 解析 → 拼写校准 → 翻译 → 导出。
@@ -179,25 +149,14 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 		zhMD = filepath.Join(parseDir, stem+"_zh.md")
 	}
 
-	sup, err := p.startSupervisor()
-	if err != nil {
-		return nil, err
-	}
-	defer sup.Stop()
-
 	// [0/4] 语言预检：本地抽文本层判定，中文 PDF 直接拒绝（不烧 MinerU 配额）。
 	// 抽到的文本层留给 [1.5] 拼写校准复用，避免同一 PDF 抽两遍。
 	var srcText string
-	if raw, err := sup.Call(ctx, "pdf_text", map[string]any{"pdf_path": pdfPath}, 2*time.Minute); err == nil {
-		var pt struct {
-			Text string `json:"text"`
-		}
-		if json.Unmarshal(raw, &pt) == nil {
-			srcText = pt.Text
-			if IsChineseText(pt.Text) {
-				p.warnf("语言预检：中文 PDF，无需翻译流程")
-				return nil, fmt.Errorf("检测到中文 PDF，无需翻译。")
-			}
+	if text, err := pdftext.ExtractText(pdfPath); err == nil {
+		srcText = text
+		if IsChineseText(text) {
+			p.warnf("语言预检：中文 PDF，无需翻译流程")
+			return nil, fmt.Errorf("检测到中文 PDF，无需翻译。")
 		}
 	}
 	// 预检失败（无文本层/引擎异常）不拦路，走正常流程
@@ -222,13 +181,8 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 	if cfg.Repair.Spelling || cfg.Repair.Symbols {
 		p.stage("拼写校准")
 		if strings.TrimSpace(srcText) == "" {
-			if raw, err := sup.Call(ctx, "pdf_text", map[string]any{"pdf_path": pdfPath}, 2*time.Minute); err == nil {
-				var pt struct {
-					Text string `json:"text"`
-				}
-				if json.Unmarshal(raw, &pt) == nil {
-					srcText = pt.Text
-				}
+			if text, err := pdftext.ExtractText(pdfPath); err == nil {
+				srcText = text
 			}
 		}
 		if strings.TrimSpace(srcText) == "" {
@@ -252,9 +206,8 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 	// [2/4] 翻译
 	p.stage("翻译中")
 	p.logf("翻译（%d 路并发）…", cfg.LLM.Concurrency)
-	go p.pumpProgress(sup)
 	start = time.Now()
-	tr, err := p.translate(ctx, sup, res.MDPath, zhMD, plan)
+	tr, err := p.translate(ctx, res.MDPath, zhMD, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -298,23 +251,11 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 // 供存量文档在新版校准规则下重新加工，也用于人工抽查修复明细。
 // 显式的修复命令，始终跑全量（符号 + 词级），不受 repair 配置开关限制。
 func (p *Pipeline) Recalibrate(ctx context.Context, mdPath, pdfPath string) (*repair.Stats, error) {
-	sup, err := p.startSupervisor()
-	if err != nil {
-		return nil, err
-	}
-	defer sup.Stop()
-
-	raw, err := sup.Call(ctx, "pdf_text", map[string]any{"pdf_path": pdfPath}, 2*time.Minute)
+	srcText, err := pdftext.ExtractText(pdfPath)
 	if err != nil {
 		return nil, fmt.Errorf("文本抽取失败: %w", err)
 	}
-	var pt struct {
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal(raw, &pt); err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(pt.Text) == "" {
+	if strings.TrimSpace(srcText) == "" {
 		return nil, fmt.Errorf("PDF 文本层为空（扫描件无法校准）")
 	}
 	// 备份只保留首次：二次运行若覆盖 .bak，第一次的原件就丢了
@@ -326,7 +267,7 @@ func (p *Pipeline) Recalibrate(ctx context.Context, mdPath, pdfPath string) (*re
 			}
 		}
 	}
-	st, err := repair.Apply(mdPath, pt.Text, repair.Options{Spelling: true, Symbols: true})
+	st, err := repair.Apply(mdPath, srcText, repair.Options{Spelling: true, Symbols: true})
 	if err != nil {
 		return nil, err
 	}
@@ -367,17 +308,10 @@ func (p *Pipeline) TranslateMD(ctx context.Context, mdPath, outPDFOverride strin
 		renderDir = filepath.Dir(zhMD)
 	}
 
-	sup, err := p.startSupervisor()
-	if err != nil {
-		return nil, err
-	}
-	defer sup.Stop()
-
 	p.stage("翻译中")
 	p.logf("翻译（%d 路并发，参考文献保留原文）…", cfg.LLM.Concurrency)
-	go p.pumpProgress(sup)
 	start := time.Now()
-	tr, err := p.translate(ctx, sup, mdPath, zhMD, plan)
+	tr, err := p.translate(ctx, mdPath, zhMD, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -441,16 +375,6 @@ func (p *Pipeline) ExportMDPlan(ctx context.Context, mdPath string, plan *Archiv
 	return &Result{OutPDF: finalPath, ZHMD: archivedMD, WorkDir: plan.Dir}, nil
 }
 
-// pumpProgress 把引擎的进度事件转给回调。
-func (p *Pipeline) pumpProgress(sup *engine.Supervisor) {
-	if p.CB.Progress == nil {
-		return
-	}
-	for ev := range sup.Events {
-		p.CB.Progress(ev.Done, ev.Total, ev.Failed, ev.DoneIdx, ev.FailedIdx, ev.Sweep)
-	}
-}
-
 type translateOutcome struct {
 	Total          int              `json:"total"`
 	Done           int              `json:"done"`
@@ -461,38 +385,71 @@ type translateOutcome struct {
 }
 
 // translate 共用的翻译环节（RunPDF 与 TranslateMD 唯一的差异在输入输出路径）。
-func (p *Pipeline) translate(ctx context.Context, sup *engine.Supervisor, mdPath, outPath string, plan *ArchivePlan) (*translateOutcome, error) {
+// 进程内直调自 v1.1.1 引擎母本移植的 Go 引擎；进度事件经 OnEvent 直接转给回调，
+// 引擎诊断日志（切段数、断点复用、校验未过原因、收尾补翻过程等）
+// 对齐原 Python 边车 stderr 的转发口径，走 warn 级日志。
+func (p *Pipeline) translate(ctx context.Context, mdPath, outPath string, plan *ArchivePlan) (*translateOutcome, error) {
 	cfg := p.Cfg
 	progressPath := ""
 	if plan != nil {
 		progressPath = plan.ProgressPath
 	}
-	raw, err := sup.Call(ctx, "translate", map[string]any{
-		"md_path":         mdPath,
-		"out_path":        outPath,
-		"progress_path":   progressPath,
-		"glossary":        glossaryPairs(cfg),
-		"system_rules":    cfg.Rules.ActiveText(),
-		"bilingual":       cfg.Export.Bilingual,
-		"skip_references": cfg.Translate.SkipReferences,
-		"llm": map[string]any{
-			"base_url":    cfg.LLM.BaseURL,
-			"api_key":     cfg.LLM.APIKey,
-			"model":       cfg.LLM.Model,
-			"concurrency": cfg.LLM.Concurrency,
-		},
-	}, 60*time.Minute)
+	tr, err := func() (*engine.TranslateResult, error) {
+		// ctx 取消 parity：v1.1.1 的 sup.Call 随 ctx 中断边车，此处以
+		// select 等价——CLI Ctrl+C / 未来 GUI 取消能立即返回，不空等。
+		type outcome struct {
+			tr  *engine.TranslateResult
+			err error
+		}
+		var aborted atomic.Bool // 取消后丢弃僵尸 goroutine 的迟到回调
+		ch := make(chan outcome, 1)
+		go func() {
+			tr, err := engine.Translate(engine.TranslateOptions{
+				MDPath:         mdPath,
+				OutPath:        outPath,
+				ProgressPath:   progressPath,
+				Glossary:       glossaryPairs(cfg),
+				SystemRules:    cfg.Rules.ActiveText(),
+				Bilingual:      cfg.Export.Bilingual,
+				SkipReferences: cfg.Translate.SkipReferences,
+				LLM: engine.LLMOptions{
+					BaseURL:     cfg.LLM.BaseURL,
+					APIKey:      cfg.LLM.APIKey,
+					Model:       cfg.LLM.Model,
+					Concurrency: cfg.LLM.Concurrency,
+				},
+				OnEvent: func(ev engine.Event) {
+					if aborted.Load() {
+						return
+					}
+					if p.CB.Progress != nil {
+						p.CB.Progress(ev.Done, ev.Total, ev.Failed, ev.DoneIdx, ev.FailedIdx, ev.Sweep)
+					}
+				},
+				Logf: func(format string, a ...any) {
+					p.warnf(format, a...)
+				},
+			})
+			ch <- outcome{tr, err}
+		}()
+		select {
+		case r := <-ch:
+			return r.tr, r.err
+		case <-ctx.Done():
+			aborted.Store(true)
+			return nil, fmt.Errorf("翻译已取消: %w", ctx.Err())
+		}
+	}()
 	if err != nil {
-		return nil, err
-	}
-	var tr translateOutcome
-	if err := json.Unmarshal(raw, &tr); err != nil {
 		return nil, err
 	}
 	for _, w := range tr.Warnings {
 		p.warnf("成品校验警告：%s", w)
 	}
-	return &tr, nil
+	return &translateOutcome{
+		Total: tr.Total, Done: tr.Done, KeptReferences: tr.KeptReferences,
+		Failed: tr.Failed, Warnings: tr.Warnings, OutPath: tr.OutPath,
+	}, nil
 }
 
 // zhTarget 排版导出的输入。
@@ -608,30 +565,4 @@ func sanitize(name string) string {
 	r := strings.NewReplacer(`\`, "_", "/", "_", ":", "_", "*", "_", "?", "_",
 		`"`, "_", "<", "_", ">", "_", "|", "_", " ", "_")
 	return r.Replace(name)
-}
-
-// findEngineDir 定位 engine/ 目录：LITERATURE_ENGINE → exe 旁 → exe 上级逐级
-// （开发树里 exe 在 build\bin 下，仓库根才有 engine/）→ 当前目录。
-func findEngineDir() (string, error) {
-	if p := os.Getenv("LITERATURE_ENGINE"); p != "" {
-		return p, nil
-	}
-	if exe, err := os.Executable(); err == nil {
-		dir := filepath.Dir(exe)
-		for i := 0; i < 4; i++ {
-			p := filepath.Join(dir, "engine")
-			if fi, err := os.Stat(p); err == nil && fi.IsDir() {
-				return p, nil
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
-		}
-	}
-	if fi, err := os.Stat("engine"); err == nil && fi.IsDir() {
-		return filepath.Abs("engine")
-	}
-	return "", fmt.Errorf("找不到 engine 目录（可设 LITERATURE_ENGINE 指定）")
 }

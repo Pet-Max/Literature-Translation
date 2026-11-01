@@ -102,23 +102,12 @@ jobs:
       - name: Build main exe
         run: go build -tags desktop,production -ldflags "-H windowsgui" -o build/bin/Literature-Translation.exe .
 
-      # 嵌入式 Python 运行时：直接复用本地脚本（单一事实源——pymupdf 版本锁定与构建期清理只在脚本里维护）
-      - name: Prepare embedded python runtime
-        shell: cmd
-        run: scripts\prepare_runtime.bat
-
       - name: Stage payload
         shell: pwsh
         run: |
           $stage = "build/package/Literature-Translation"
-          New-Item -ItemType Directory -Force "$stage/engine" | Out-Null
+          New-Item -ItemType Directory -Force $stage | Out-Null
           Copy-Item build/bin/Literature-Translation.exe $stage/
-          Copy-Item engine/*.py "$stage/engine/"
-          # robocopy 语义确定；Copy-Item 对「目标不存在 + 通配递归」有 leaf/container 坑
-          robocopy build/runtime "$stage/runtime" /E /NFL /NDL /NJH /NJS
-          if ($LASTEXITCODE -ge 8) { exit 1 }
-          # robocopy 成功码是 1..7：不清零会被 pwsh 当作步骤失败
-          $global:LASTEXITCODE = 0
           Copy-Item LICENSE $stage/
 
       - uses: actions/upload-artifact@v4

@@ -65,6 +65,7 @@ func isBadArchiveName(name string) bool {
 func NewArchivePlan(root, sourcePath string) (*ArchivePlan, error) {
 	sourcePath, _ = filepath.Abs(sourcePath)
 	stem := strings.TrimSuffix(filepath.Base(sourcePath), filepath.Ext(sourcePath))
+	stem = sanitizeName(stem) // 归档文件名同样清洗（Windows 保留名/结尾点）
 	base := sanitizeName(stem)
 	if isBadArchiveName(base) {
 		base = "未命名" // 文件名 ...md / CON.md 等极端名落固定档案夹

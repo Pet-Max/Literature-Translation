@@ -81,7 +81,11 @@ func Build(md string, opt Options) string {
 	// 任何机器上正文/标题都命中 "LXGW WenKai"，不再回退到系统字体
 	b.WriteString(`<link rel="stylesheet" href="/assets/lxgw/lxgwwenkai-regular.css">` + "\n")
 	b.WriteString(`<link rel="stylesheet" href="/assets/lxgw/lxgwwenkai-bold.css">` + "\n")
+	// 公式横线减细：Edge 打印把 KaTeX 的 0.75pt 横线取整得偏粗，视觉上
+	// 明显重于 LaTeX 标准（0.476pt）。scaleY(0.6) 实测压到 ~0.45pt
+	//（实验：_paper_candidates/katextest），横线越少越接近印刷质感。
 	b.WriteString("<style>\n" + css + "\n" + twoCol +
+		"\n.mfrac .frac-line,.overline .overline-line{transform:scaleY(0.6);transform-origin:bottom}" +
 		"\nbody{font-family:" + font + "}\n" + opt.UserFontCSS + "\n</style>\n")
 	b.WriteString("</head>\n<body>\n")
 	b.WriteString("<h1 class=\"doc-title\">" + title + "</h1>\n")
@@ -175,7 +179,10 @@ func markdownToHTML(md string) string {
 }
 
 // restoreMath 把单个冻结区段还原为 HTML（代码块或 KaTeX 占位 span）。
+// 入口先还原冻结前转义的 \$：冻结发生在 \$→占位符替换之后，冻结区捕获
+// 的内容里残留 NUL+"ESC"+NUL 标记，不还原会以乱码进导出 HTML。
 func restoreMath(key, raw string) string {
+	raw = unescape.Replace(raw)
 	if strings.HasPrefix(raw, "```") || strings.HasPrefix(raw, "~~~") {
 		langAndCode := strings.TrimPrefix(strings.TrimPrefix(raw, "```"), "~~~")
 		nl := strings.IndexByte(langAndCode, '\n')

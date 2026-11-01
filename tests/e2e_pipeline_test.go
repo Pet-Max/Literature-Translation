@@ -1,14 +1,13 @@
 // e2e_pipeline_test.go — 管线集成测试（第三层测试体系）。
 //
 // 用 Go 内嵌 httptest 起 mock LLM（OpenAI 兼容 /chat/completions），
-// 驱动真实 Python 边车 + Go 排版 + Edge 打印，跑通 TranslateMD 全流程，
-// 断言归档体系四类产物落盘。不需要真 LLM、不烧 MinerU 配额。
+// 驱动内置 Go 引擎（v1.2.0 进程内直调）+ Go 排版 + Edge 打印，
+// 跑通 TranslateMD 全流程，断言归档体系四类产物落盘。
+// 不需要真 LLM、不烧 MinerU 配额。
 // 两个用例：全链路归档（TestE2ETranslateMDArchive）、断点续跑（TestE2ECheckpointResume）。
 //
 // 运行：go test ./tests/ -v -run TestE2E   （-short 跳过）
-// 依赖：PATH 上的 python（引擎边车依赖）、本机 Edge（PDF 打印）；
-//
-//	缺任一则跳过，不算失败。
+// 依赖：本机 Edge（PDF 打印）；缺则跳过，不算失败。
 package tests
 
 import (
@@ -18,9 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -30,16 +27,6 @@ import (
 	"literature-translation/internal/export"
 	"literature-translation/internal/pipeline"
 )
-
-// repoRoot 以本文件位置定位仓库根（go test 的 cwd 是包目录，不能依赖相对路径）。
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("无法定位源文件路径")
-	}
-	return filepath.Dir(filepath.Dir(file))
-}
 
 const sampleEN = `# Sample Paper
 
@@ -62,13 +49,9 @@ func TestE2ETranslateMDArchive(t *testing.T) {
 	if testing.Short() {
 		t.Skip("集成测试，-short 跳过")
 	}
-	if _, err := exec.LookPath("python"); err != nil {
-		t.Skip("PATH 上没有 python，跳过管线集成测试")
-	}
 	if _, err := export.FindEdge(); err != nil {
 		t.Skip("本机没有 Edge，跳过管线集成测试")
 	}
-	t.Setenv("LITERATURE_ENGINE", filepath.Join(repoRoot(t), "engine"))
 
 	// ---- mock LLM：回显 user 内容 + 追加中文标记句 ----
 	// 占位符/标题数/长度校验因此全部必过；标记句可断言「LLM 响应确实进入译文」。
@@ -333,10 +316,6 @@ func TestE2ECheckpointResume(t *testing.T) {
 	if testing.Short() {
 		t.Skip("集成测试，-short 跳过")
 	}
-	if _, err := exec.LookPath("python"); err != nil {
-		t.Skip("PATH 上没有 python，跳过管线集成测试")
-	}
-	t.Setenv("LITERATURE_ENGINE", filepath.Join(repoRoot(t), "engine"))
 
 	mock := &failMock{failSub: "ZZFAILZZ"}
 	srv := httptest.NewServer(mock.handler())
@@ -424,5 +403,52 @@ func TestE2ECheckpointResume(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"meta"`) || strings.Count(string(data), `"zh"`) != 3 {
 		t.Errorf("断点文件内容异常（应有 meta 行 + 3 条 zh 记录）：\n%s", data)
+	}
+}
+
+// TestE2ECancelledTranslate 取消语义：ctx 已取消 → TranslateMD 立即返回
+// 「翻译已取消」，不空等引擎（v1.1.1 sup.Call 的取消 parity）。
+func TestE2ECancelledTranslate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("集成测试，-short 跳过")
+	}
+	// 挂起式 mock：请求永不返回 → 引擎 goroutine 阻塞，确定性走取消分支
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	}()
+
+	cfg := config.Default()
+	cfg.LLM.BaseURL = srv.URL
+	cfg.LLM.APIKey = "test-key"
+	cfg.LLM.Model = "mock-model"
+	cfg.LLM.Concurrency = 1
+
+	pl, err := pipeline.New(cfg, pipeline.Callbacks{
+		Log:      func(string, string) {},
+		Progress: func(int, int, int, []int, []int, bool) {},
+		Stage:    func(string) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcDir := t.TempDir()
+	mdPath := filepath.Join(srcDir, "cancel.md")
+	if err := os.WriteFile(mdPath, []byte(sampleEN), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 预先取消
+	start := time.Now()
+	_, err = pl.TranslateMD(ctx, mdPath, "", nil)
+	elapsed := time.Since(start)
+	if err == nil || !strings.Contains(err.Error(), "翻译已取消") {
+		t.Fatalf("应返回取消错误: %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("取消未立即生效: %v", elapsed)
 	}
 }

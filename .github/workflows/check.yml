@@ -1,5 +1,5 @@
 # check.yml — 质量门工作流：任意分支 push / PR / 手动（可选 ref）。永不发布。
-# 五步门禁实现在 .github/actions/gate（与 release.yml 共用，改门禁只改那里）。
+# 四步门禁实现在 .github/actions/gate（与 release.yml 共用，改门禁只改那里）。
 #
 # ── 触发场景对照 ─────────────────────────────────────────────────────
 #   push 任意分支 / PR / dispatch(可选 ref) → 运行本门禁（同 ref 自动取消旧跑）

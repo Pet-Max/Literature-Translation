@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"literature-translation/internal/config"
@@ -30,7 +31,7 @@ import (
 type App struct {
 	ctx       context.Context
 	queueCtx  context.Context
-	cfg       *config.Config
+	cfg       atomic.Pointer[config.Config]
 	pl        *pipeline.Pipeline
 	queue     *TaskQueue
 	logBuffer []LogLine // 环形保留最近 500 条
@@ -54,7 +55,7 @@ func NewApp() *App { return &App{} }
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	a.queueCtx = ctx
-	a.cfg = config.MustLoad()
+	a.cfg.Store(config.MustLoad())
 	a.logBuffer = []LogLine{}
 	a.cleanupLegacyWebviewData()
 	a.queue = NewTaskQueue(a.runTaskSafe)
@@ -92,7 +93,7 @@ func (a *App) cleanupLegacyWebviewData() {
 // 回调跑在 pipeline 的进度 goroutine 里，与 worker 并发——所有 Task
 // 字段写入一律走 queue.Mutate（队列锁内），推送的是值快照。
 func (a *App) newPipeline() (*pipeline.Pipeline, error) {
-	return pipeline.New(a.cfg, pipeline.Callbacks{
+	return pipeline.New(a.cfg.Load(), pipeline.Callbacks{
 		Log: func(level, msg string) {
 			line := a.pushLog(level, msg)
 			runtime.EventsEmit(a.ctx, "log:line", line)
@@ -234,7 +235,7 @@ func (a *App) runTask(t *Task) error {
 	})
 
 	// 归档方案：每篇文献在归档根下建独立档案夹（四类产物 + _process）
-	plan, err := pipeline.NewArchivePlan(a.cfg.Export.OutputDir, t.SourcePath)
+	plan, err := pipeline.NewArchivePlan(a.cfg.Load().Export.OutputDir, t.SourcePath)
 	if err != nil {
 		a.setTask(func(x *Task) {
 			x.Status = StatusFailed
@@ -417,7 +418,7 @@ func (a *App) afterQueueChange() {
 // ---------------------------------------------------------------- 配置
 
 // GetConfig 返回当前配置（前端表单初值）。
-func (a *App) GetConfig() *config.Config { return a.cfg }
+func (a *App) GetConfig() *config.Config { return a.cfg.Load() }
 
 // SaveConfig 用前端提交的配置原地更新并落盘（pipeline 共享指针，立即生效）。
 // 凭据无条件采纳提交值：前端表单是唯一写入方且总是回传完整值
@@ -427,16 +428,15 @@ func (a *App) SaveConfig(newCfg *config.Config) error {
 	if newCfg == nil {
 		return fmt.Errorf("配置为空")
 	}
-	userFonts := a.cfg.UserFonts
-	userFontSel := a.cfg.Export.UserFont
-	*a.cfg = *newCfg
-	a.cfg.UserFonts = userFonts
-	a.cfg.Export.UserFont = userFontSel
-	err := a.cfg.Save()
-	if err == nil {
-		a.pushLog("info", "配置已保存")
+	nc := *newCfg
+	nc.UserFonts = a.cfg.Load().UserFonts
+	nc.Export.UserFont = a.cfg.Load().Export.UserFont
+	if err := (&nc).Save(); err != nil {
+		return err
 	}
-	return err
+	a.cfg.Store(&nc)
+	a.pushLog("info", "配置已保存")
+	return nil
 }
 
 // IronRules 系统默认规则文本（前端「恢复默认」的还原源）。
@@ -448,9 +448,14 @@ func (a *App) SaveRules(active string, presets []config.RulePreset) error {
 	if len(presets) == 0 {
 		return fmt.Errorf("至少保留一套规则预设")
 	}
-	a.cfg.Rules.Active = active
-	a.cfg.Rules.Presets = presets
-	return a.cfg.Save()
+	nc := *a.cfg.Load()
+	nc.Rules.Active = active
+	nc.Rules.Presets = presets
+	if err := (&nc).Save(); err != nil {
+		return err
+	}
+	a.cfg.Store(&nc)
+	return nil
 }
 
 // PickFiles 打开原生多选文件对话框（PDF / MD）。取消或未选返回空切片。
@@ -472,10 +477,10 @@ func (a *App) PickFiles() ([]string, error) {
 // FontList 已导入字体列表。绑定层不变式：永不返回 nil——nil 会被序列化
 // 成 null，前端对返回值直接 .map 会崩。
 func (a *App) FontList() []config.UserFont {
-	if a.cfg.UserFonts == nil {
+	if a.cfg.Load().UserFonts == nil {
 		return []config.UserFont{}
 	}
-	return a.cfg.UserFonts
+	return a.cfg.Load().UserFonts
 }
 
 // FontAdd 导入字体文件（三连检）。
@@ -485,8 +490,8 @@ func (a *App) FontAdd(path string) (config.UserFont, error) {
 	if err != nil {
 		return uf, err
 	}
-	names := make([]string, 0, len(a.cfg.UserFonts))
-	for _, u := range a.cfg.UserFonts {
+	names := make([]string, 0, len(a.cfg.Load().UserFonts))
+	for _, u := range a.cfg.Load().UserFonts {
 		names = append(names, u.InternalName)
 	}
 	internal := fonts.InternalName(fonts.NextNumber(names))
@@ -495,10 +500,13 @@ func (a *App) FontAdd(path string) (config.UserFont, error) {
 		return uf, err
 	}
 	uf = config.UserFont{InternalName: internal, DisplayName: info.DisplayName, FileName: info.FileName}
-	a.cfg.UserFonts = append(a.cfg.UserFonts, uf)
-	if err := a.cfg.Save(); err != nil {
+	nc := *a.cfg.Load()
+	nc.UserFonts = append(append([]config.UserFont{}, a.cfg.Load().UserFonts...), uf)
+	if err := (&nc).Save(); err != nil {
+		_ = fonts.Remove(uf.FileName) // 回滚：不留孤儿字体文件
 		return uf, err
 	}
+	a.cfg.Store(&nc)
 	a.pushLog("info", fmt.Sprintf("字体已导入: %s", uf.DisplayName))
 	return uf, nil
 }
@@ -506,34 +514,39 @@ func (a *App) FontAdd(path string) (config.UserFont, error) {
 // SetFontPreset 切换正文字体预设并落盘。preset: lxgw | songti | yahei |
 // custom（userFont 为导入字体内部名）。字体栈与预设同步更新。
 func (a *App) SetFontPreset(preset, userFont string) error {
+	nc := *a.cfg.Load()
 	switch preset {
 	case "songti":
-		a.cfg.Export.Font = `"Times New Roman", "SimSun", "Songti SC", "STSong", serif`
+		nc.Export.Font = `"Times New Roman", "SimSun", "Songti SC", "STSong", serif`
 	case "yahei":
-		a.cfg.Export.Font = `"Arial", "Microsoft YaHei", "PingFang SC", sans-serif`
+		nc.Export.Font = `"Arial", "Microsoft YaHei", "PingFang SC", sans-serif`
 	case "custom":
 		if userFont == "" {
 			return fmt.Errorf("custom 预设需要字体内部名")
 		}
 	default: // lxgw
 		preset = "lxgw"
-		a.cfg.Export.Font = config.Default().Export.Font
+		nc.Export.Font = config.Default().Export.Font
 	}
-	a.cfg.Export.FontPreset = preset
+	nc.Export.FontPreset = preset
 	if userFont == "builtin" {
 		userFont = ""
 	}
-	if userFont != "" && a.cfg.FindUserFont(userFont) == nil {
+	if userFont != "" && nc.FindUserFont(userFont) == nil {
 		return fmt.Errorf("未找到字体 %s", userFont)
 	}
-	a.cfg.Export.UserFont = userFont
-	return a.cfg.Save()
+	nc.Export.UserFont = userFont
+	if err := (&nc).Save(); err != nil {
+		return err
+	}
+	a.cfg.Store(&nc)
+	return nil
 }
 
 // FetchModels 从上游 OpenAI 兼容接口拉取模型列表（GET {base_url}/models）。
 func (a *App) FetchModels() ([]string, error) {
-	base := strings.TrimRight(strings.TrimSpace(a.cfg.LLM.BaseURL), "/")
-	if base == "" || strings.TrimSpace(a.cfg.LLM.APIKey) == "" {
+	base := strings.TrimRight(strings.TrimSpace(a.cfg.Load().LLM.BaseURL), "/")
+	if base == "" || strings.TrimSpace(a.cfg.Load().LLM.APIKey) == "" {
 		return nil, fmt.Errorf("请先填写模型 API 地址与 API Key")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -542,7 +555,7 @@ func (a *App) FetchModels() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(a.cfg.LLM.APIKey))
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(a.cfg.Load().LLM.APIKey))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求上游失败: %v", err)
@@ -667,7 +680,7 @@ func (a *App) TestLLM() (int, error) {
 // TestMinerU 测试 MinerU Token 有效性：以假 batch id 查询，借鉴权层差异判定
 // （Token 无效 → 401/403/A0202；有效 → 业务层"任务不存在"类错误，同样证明通过鉴权）。
 func (a *App) TestMinerU() (string, error) {
-	token := strings.TrimSpace(a.cfg.MinerU.Token)
+	token := strings.TrimSpace(a.cfg.Load().MinerU.Token)
 	if token == "" {
 		return "", fmt.Errorf("请先填写 API Token")
 	}
@@ -685,12 +698,60 @@ func (a *App) TestMinerU() (string, error) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	text := string(body)
-	if strings.Contains(text, `"code":[401,403]`) || strings.Contains(text, "A0202") ||
-		resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return "", fmt.Errorf("Token 无效（鉴权被拒，HTTP %d）", resp.StatusCode)
 	}
-	return "Token 有效", nil
+	// 判据结构化解析：code（数字或数组）含 401/403，或 A0202 → 无效；
+	// code 缺失/null/200/0 → 有效；解析失败或其它数值 → 「无法识别」
+	//（不再把任意 200 判有效，也不再凭子串匹配误判 1401 类数值）
+	var probe struct {
+		Code json.RawMessage `json:"code"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return "", fmt.Errorf("响应无法识别（非 JSON，HTTP %d），请人工确认 Token 状态", resp.StatusCode)
+	}
+	if strings.Contains(string(body), "A0202") {
+		return "", fmt.Errorf("Token 无效（鉴权被拒，HTTP %d）", resp.StatusCode)
+	}
+	codeBad, codeOK := parseConnTestCode(probe.Code)
+	switch {
+	case codeBad:
+		return "", fmt.Errorf("Token 无效（鉴权被拒，HTTP %d）", resp.StatusCode)
+	case codeOK:
+		return "Token 有效", nil
+	}
+	return "", fmt.Errorf("接口返回无法识别的 code=%s，请人工确认 Token 状态", strings.TrimSpace(string(probe.Code)))
+}
+
+// parseConnTestCode 解析 conn-test 响应的 code 字段（标量数字或数组均可）。
+// 返回 (无效, 有效) 两个判定：含 401/403 → 无效；含 200/0 → 有效；
+// code 为 null/缺失 → 有效；解析失败 → 双 false（调用方报「无法识别」）。
+func parseConnTestCode(raw json.RawMessage) (bad, ok bool) {
+	t := strings.TrimSpace(string(raw))
+	if t == "" || t == "null" {
+		return false, true
+	}
+	var codes []float64
+	if t[0] == '[' {
+		if json.Unmarshal(raw, &codes) != nil {
+			return false, false
+		}
+	} else {
+		var v float64
+		if json.Unmarshal(raw, &v) != nil {
+			return false, false
+		}
+		codes = []float64{v}
+	}
+	for _, n := range codes {
+		switch n {
+		case 401, 403:
+			bad = true
+		case 200, 0:
+			ok = true
+		}
+	}
+	return bad, ok
 }
 
 // PickFontFile 打开单选字体文件对话框（ttf / otf）。取消返回空串。

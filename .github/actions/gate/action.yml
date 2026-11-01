@@ -1,7 +1,7 @@
 # 质量门禁（composite action）：check.yml 与 release.yml 共用的唯一门禁实现。
 # 改门禁步骤只改这个文件。引用前必须先 checkout（本地 action）。
 name: "质量门禁"
-description: "六步：actionlint / go vet / ruff / Python 单测 / go test（含管线 E2E）/ 前端 E2E"
+description: "四步：actionlint / go vet / go test（含管线 E2E）/ 前端 E2E"
 runs:
   using: composite
   steps:
@@ -17,29 +17,15 @@ runs:
       with:
         go-version: "1.26"
 
-    - uses: actions/setup-python@v6
-      with:
-        python-version: "3.12"
-
-    - name: Install Python deps
-      shell: pwsh
-      run: pip install pymupdf==1.26.7 httpx==0.28.1 ruff
-
     - name: go vet
       shell: pwsh
       run: go vet ./...
 
-    - name: ruff check
+    - name: go test -race (unit + fuzz seeds + pipeline E2E)
       shell: pwsh
-      run: python -m ruff check engine/
-
-    - name: python unittest
-      shell: pwsh
-      run: python -m unittest discover -s engine/tests
-
-    - name: go test (unit + fuzz seeds + pipeline E2E)
-      shell: pwsh
-      run: go test ./...
+      run: go test -race ./...
+      env:
+        CGO_ENABLED: "1"
 
     - name: frontend E2E
       shell: pwsh
