@@ -1,8 +1,7 @@
 // engine.go — 翻译主循环：切段 → 参考文献甄别 → 并发翻译（质量重试）
-// → 收尾补翻 → 组装写盘。自 v1.1.1 引擎母本移植（母本 engine.py 的
-// op_translate 主循环），JSON-RPC 边车改为进程内直调。
+// → 收尾补翻 → 组装写盘。旧入口保留，管线通过 context 传递取消。
 //
-// 事件契约（前端依赖，字段与母本逐一对应）：
+// 事件契约（前端依赖）：
 //
 //	{"event": "progress", "done": 12, "total": 34, "failed": 1,
 //	 "done_idx": [0,1,2], "failed_idx": [5], "sweep": false}
@@ -11,6 +10,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,7 +24,7 @@ import (
 	"unicode"
 )
 
-// Event 翻译进度事件（原 supervisor.go 的定义，边车删除后由本包直发）。
+// Event 翻译进度事件，由引擎直接发送。
 type Event struct {
 	Done      int   `json:"done"`
 	Total     int   `json:"total"`
@@ -34,7 +34,7 @@ type Event struct {
 	Sweep     bool  `json:"sweep"`
 }
 
-// 质量重试与收尾补翻参数（与母本常量一致）。
+// 质量重试与收尾补翻参数。
 const (
 	qualityAttempts = 4 // 1 次初译 + 3 次质量重试
 	sweepAttempts   = 2 // 收尾补翻时每段的重试次数
@@ -71,7 +71,7 @@ type TranslateOptions struct {
 	Logf           func(format string, a ...any) // 诊断日志回调（对齐引擎 stderr，可为 nil）
 }
 
-// TranslateResult 对齐 Python op_translate 的返回结构。
+// TranslateResult 是翻译调用的结果结构。
 type TranslateResult struct {
 	Total          int              `json:"total"`
 	Done           int              `json:"done"`
@@ -89,16 +89,17 @@ var (
 )
 
 // BuildCacheKey 任务指纹：规则/术语/开关/模型任一变化即弃用旧进度。
-// 与 Python chunk_hash(json.dumps({...}, ensure_ascii=False, sort_keys=True))
-// 逐字节一致（键序 bilingual/model/skip_refs/system）。
+// 与历史版本哈希算法逐字节一致（键序 bilingual/model/skip_refs/system），
+// 旧归档进度文件的指纹因此继续可用。
 func BuildCacheKey(system string, bilingual, skipRefs bool, model string) string {
-	return ChunkHash(`{"bilingual": ` + pyBool(bilingual) +
-		`, "model": ` + pyJSONString(model) +
-		`, "skip_refs": ` + pyBool(skipRefs) +
-		`, "system": ` + pyJSONString(system) + `}`)
+	return ChunkHash(`{"bilingual": ` + jsonBool(bilingual) +
+		`, "model": ` + jsonString(model) +
+		`, "skip_refs": ` + jsonBool(skipRefs) +
+		`, "system": ` + jsonString(system) + `}`)
 }
 
-func pyBool(b bool) string {
+// jsonBool 布尔值的 JSON 字面量。
+func jsonBool(b bool) string {
 	if b {
 		return "true"
 	}
@@ -152,8 +153,11 @@ func (d *refDetector) detect(chunk string) bool {
 	return false
 }
 
-// Translate 执行完整翻译并写出译文 MD。
-func Translate(opts TranslateOptions) (*TranslateResult, error) {
+// TranslateContext 执行完整翻译并写出译文 MD；ctx 取消会中止全部阶段。
+func TranslateContext(ctx context.Context, opts TranslateOptions) (*TranslateResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	text := opts.MDText
 	if text == "" && opts.MDPath != "" {
 		data, err := os.ReadFile(opts.MDPath)
@@ -238,7 +242,7 @@ func Translate(opts TranslateOptions) (*TranslateResult, error) {
 		for _, f := range failed {
 			badSet[f.I] = true
 		}
-		// 非 nil 空切片：Python 母本事件恒为 []，JSON 序列化不得出现 null
+		// 非 nil 空切片：事件契约要求空列表为 []，JSON 序列化不得出现 null
 		doneIdx := make([]int, 0, len(okSet))
 		failedIdx := make([]int, 0, len(badSet))
 		for i := range okSet {
@@ -273,7 +277,10 @@ func Translate(opts TranslateOptions) (*TranslateResult, error) {
 		var history []ChatMessage
 		lastReasons := []string{}
 		for attempt := 1; attempt <= attempts; attempt++ {
-			resp, err := client.Complete(system, userMsg, 0.1, history)
+			if ctx.Err() != nil {
+				return "", false
+			}
+			resp, err := client.CompleteContext(ctx, system, userMsg, 0.1, history)
 			if err != nil {
 				// LLMError：网络层已重试仍失败或确定性失败（4xx 等）
 				logf("第 %d 段调用失败：%v", i+1, err)
@@ -294,6 +301,9 @@ func Translate(opts TranslateOptions) (*TranslateResult, error) {
 				{Role: "user", Content: BuildCorrection(reasons)},
 			}
 		}
+		if ctx.Err() != nil {
+			return "", false
+		}
 		reason := strings.Join(lastReasons, "；")
 		progress.RecordFailed(i, reason)
 		appendFailed(i, reason)
@@ -301,6 +311,9 @@ func Translate(opts TranslateOptions) (*TranslateResult, error) {
 	}
 
 	translateOne := func(i int) {
+		if ctx.Err() != nil {
+			return
+		}
 		defer func() {
 			// 兜底（翻译/回填/断点落盘的意外 panic）：登记该段失败并保留
 			// 原文，不让一个畸形响应或磁盘错误杀掉整轮 run。
@@ -338,11 +351,14 @@ func Translate(opts TranslateOptions) (*TranslateResult, error) {
 			mu.Unlock()
 			return
 		}
+		if ctx.Err() != nil {
+			return
+		}
 		acceptSegment(i, frozen, zh, chunks, progress, &mu, results, okSet)
 	}
 
 	// 有序工作池：索引经 channel FIFO 派发（对齐 ThreadPoolExecutor 的
-	// 提交序语义——并发=1 时严格按段序执行，事件流与母本一致）。
+	// 提交序语义——并发=1 时严格按段序执行，保持既有事件顺序）。
 	doneCh := make(chan int, total)
 	idxCh := make(chan int)
 	var wg sync.WaitGroup
@@ -351,34 +367,49 @@ func Translate(opts TranslateOptions) (*TranslateResult, error) {
 		go func() {
 			defer wg.Done()
 			for i := range idxCh {
+				if ctx.Err() != nil {
+					return
+				}
 				translateOne(i)
 				doneCh <- i
 			}
 		}()
 	}
 	// 派发与收割并行：收割 goroutine 按 doneCh FIFO 逐个发进度事件
-	//（对齐 Python as_completed 的"每完成一段就发一次"语义；发索引会
+	//（每完成一段就发送一次事件；附带索引会
 	// 阻塞在 worker 空闲上，若先派发完再收割，事件全变终态）。
 	emitDone := make(chan struct{})
 	go func() {
 		defer close(emitDone)
-		for count := 0; count < total; count++ {
-			<-doneCh
-			emitProgress(false)
+		for range doneCh {
+			if ctx.Err() == nil {
+				emitProgress(false)
+			}
 		}
 	}()
+dispatch:
 	for i := 0; i < total; i++ {
-		idxCh <- i
+		select {
+		case <-ctx.Done():
+			break dispatch
+		case idxCh <- i:
+		}
 	}
 	close(idxCh)
 	wg.Wait()
+	close(doneCh)
 	<-emitDone
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	// 收尾补翻：全池跑完后对失败段集中再捞一轮——此时并发已归零，上游
 	// 限流/瞬时故障大多已恢复；成功段已在断点里，不受影响。
 	if len(failed) > 0 {
 		logf("收尾补翻：%d 段未过，%d 秒后集中重试", len(failed), sweepPause)
-		time.Sleep(sweepPause * time.Second)
+		if err := waitContext(ctx, sweepPause*time.Second); err != nil {
+			return nil, err
+		}
 		mu.Lock()
 		retryIdx := make([]int, 0, len(failed))
 		for _, f := range failed {
@@ -392,10 +423,16 @@ func Translate(opts TranslateOptions) (*TranslateResult, error) {
 		failed = nil // attemptSegment 对仍失败的段会重新登记，避免重复条目
 		mu.Unlock()
 		for _, i := range retryIdx {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			frozen := Freeze(chunks[i], 1)
 			zh, ok := attemptSegment(i, frozen, sweepAttempts)
 			if !ok {
 				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
 			acceptSegment(i, frozen, zh, chunks, progress, &mu, results, okSet)
 			logf("收尾补翻：第 %d 段已救回", i+1)
@@ -437,6 +474,9 @@ func Translate(opts TranslateOptions) (*TranslateResult, error) {
 	if dir := filepath.Dir(absPath(opts.OutPath)); dir != "" {
 		_ = os.MkdirAll(dir, 0o755)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := os.WriteFile(opts.OutPath, []byte(finalMD), 0o644); err != nil {
 		return nil, err
 	}
@@ -448,7 +488,7 @@ func Translate(opts TranslateOptions) (*TranslateResult, error) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	// Failed/Warnings 保证非 nil：Python 母本结果恒为列表，JSON 不得出现 null
+	// Failed/Warnings 保证非 nil：结果契约要求列表，JSON 不得出现 null
 	failedOut := make([]SegmentFailure, 0, len(failed))
 	failedOut = append(failedOut, failed...)
 	if warnings == nil {

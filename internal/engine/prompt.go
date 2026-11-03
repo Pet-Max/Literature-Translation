@@ -1,13 +1,13 @@
 // prompt.go — 翻译指令拼装：规则正文（预设可覆盖）+ 术语表 + 旧版补充规则。
 //
-// 自 v1.1.1 引擎母本移植（54 行）。规则正文默认用内置铁律；前端规则
+// 规则正文默认用内置规则；前端规则
 // 预设传 system_rules 时整体替换，用户在设置里对规则全文负责（机械校验
 // 仍兜底占位符完整性）。
 package engine
 
 import "strings"
 
-// IronRules 内置铁律（与 Python 母本逐字节一致）。
+// IronRules 内置规则；正文保持逐字节兼容，避免改变既有任务指纹。
 const IronRules = `你是一名物理学/学术文献翻译引擎。把用户消息中的 Markdown 学术文本翻译成简体中文，严格遵守：
 
 1. 只翻译自然语言文字；⟦F1⟧、⟦F2⟧ 这类 ⟦F数字⟧ 占位符（代表公式、代码、图片）必须原样保留：一个不能少、一个不能改、位置不能移动，也不要试图翻译或解读占位符内容。
@@ -18,7 +18,7 @@ const IronRules = `你是一名物理学/学术文献翻译引擎。把用户消
 6. 术语严格按下方术语表统一译名。
 7. 只输出译文本身。不要任何解释、前言、结语、代码围栏包裹。`
 
-// userRulesHeader / glossaryHeader 与 Python 母本逐字节一致。
+// userRulesHeader / glossaryHeader 的字节内容属于提示词兼容约定。
 const (
 	userRulesHeader = "\n\n用户补充规则（与上述铁律同等效力，须一并遵守）："
 	glossaryHeader  = "\n\n术语表（原文 → 统一译名）："
@@ -39,7 +39,7 @@ func BuildSystem(glossary [][]string, systemRules, userRules string) string {
 	var gl [][]string
 	for _, pair := range glossary {
 		if len(pair) != 2 {
-			continue // Python 侧此处 unpack 长度必为 2；防御性跳过
+			continue // 术语表条目长度恒为 2；防御性跳过
 		}
 		en, zh := strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1])
 		if en != "" && zh != "" {

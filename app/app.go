@@ -29,13 +29,19 @@ import (
 
 // App Wails 绑定结构体。
 type App struct {
-	ctx       context.Context
-	queueCtx  context.Context
-	cfg       atomic.Pointer[config.Config]
-	pl        *pipeline.Pipeline
-	queue     *TaskQueue
-	logBuffer []LogLine // 环形保留最近 500 条
-	logMu     sync.Mutex
+	ctx           context.Context
+	queueCtx      context.Context
+	queueCancel   context.CancelFunc
+	workerDone    chan struct{}
+	cfg           atomic.Pointer[config.Config]
+	cfgMu         sync.Mutex
+	configBlocked atomic.Bool
+	frontendReady atomic.Bool
+	closeAllowed  atomic.Bool
+	pl            *pipeline.Pipeline
+	queue         *TaskQueue
+	logBuffer     []LogLine // 环形保留最近 500 条
+	logMu         sync.Mutex
 }
 
 // LogLine 日志页的一条记录。
@@ -49,25 +55,27 @@ type LogLine struct {
 func NewApp() *App { return &App{} }
 
 // Startup Wails 启动钩子：加载配置、构建 pipeline、启动队列 worker。
-// 引擎初始化失败不阻断启动：队列照常工作，任务在运行时惰性重试引擎。
-// 注意顺序：先完成 a.pl 的唯一一次写入、再启动 worker goroutine——
-// 两者并发写 a.pl 会构成数据竞争（runTask 的惰性重试也写它）。
+// 先初始化唯一的回调模板，再启动 worker；每个任务分别取得配置和字体快照。
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
-	a.queueCtx = ctx
-	a.cfg.Store(config.MustLoad())
+	a.queueCtx, a.queueCancel = context.WithCancel(ctx)
+	a.workerDone = make(chan struct{})
+	loaded, loadErr := config.Load()
+	if loadErr != nil {
+		loaded = config.Default()
+		a.configBlocked.Store(true)
+	}
+	a.cfg.Store(loaded)
 	a.logBuffer = []LogLine{}
 	a.cleanupLegacyWebviewData()
 	a.queue = NewTaskQueue(a.runTaskSafe)
 	a.queue.onIdle = a.afterQueueChange
-	pl, err := a.newPipeline()
-	if err != nil {
-		a.pushLog("error", "引擎初始化失败（任务运行时会自动重试）: "+err.Error())
-	} else {
-		a.pl = pl
-		a.pushLog("info", "应用就绪")
+	a.pl, _ = a.newPipeline()
+	a.pushLog("info", "应用就绪")
+	if loadErr != nil {
+		a.pushLog("error", "配置读取失败，请在设置页恢复；原文件已保留")
 	}
-	go a.queue.Worker(ctx)
+	go func() { defer close(a.workerDone); a.queue.Worker(a.queueCtx) }()
 }
 
 // cleanupLegacyWebviewData 一次性清理 v1.0.1 及以前 WebView2 默认数据目录
@@ -89,11 +97,11 @@ func (a *App) cleanupLegacyWebviewData() {
 	}
 }
 
-// newPipeline 用统一的回调集构建 pipeline。
+// newPipeline constructs the callback template; each task supplies its own config.
 // 回调跑在 pipeline 的进度 goroutine 里，与 worker 并发——所有 Task
 // 字段写入一律走 queue.Mutate（队列锁内），推送的是值快照。
 func (a *App) newPipeline() (*pipeline.Pipeline, error) {
-	return pipeline.New(a.cfg.Load(), pipeline.Callbacks{
+	return pipeline.New(nil, pipeline.Callbacks{
 		Log: func(level, msg string) {
 			line := a.pushLog(level, msg)
 			runtime.EventsEmit(a.ctx, "log:line", line)
@@ -135,10 +143,25 @@ func (a *App) newPipeline() (*pipeline.Pipeline, error) {
 }
 
 // Shutdown 退出钩子。
-func (a *App) Shutdown(ctx context.Context) {}
+func (a *App) Shutdown(ctx context.Context) { a.stopQueue() }
 
-// BeforeClose 关闭前钩子——v1 直接允许关闭。
-func (a *App) BeforeClose(ctx context.Context) bool { return false }
+func (a *App) stopQueue() {
+	if a.queueCancel != nil {
+		a.queueCancel()
+	}
+	if a.workerDone != nil {
+		<-a.workerDone
+	}
+}
+
+// BeforeClose waits for the frontend's pending settings before normal shutdown.
+func (a *App) BeforeClose(ctx context.Context) bool {
+	if !a.frontendReady.Load() || a.closeAllowed.Load() {
+		return false
+	}
+	runtime.EventsEmit(ctx, "settings:before-close")
+	return true
+}
 
 // ---------------------------------------------------------------- 事件
 
@@ -214,19 +237,8 @@ func (a *App) runTaskSafe(t *Task) (err error) {
 // 注意：t 的可变字段（Status/Stage/Done 等）只经 setTask 在队列锁内改；
 // 本函数直接读的 t.Code/Kind/SourcePath 创建后不再变化，无竞争。
 func (a *App) runTask(t *Task) error {
-	// 引擎此前初始化失败（如 engine 目录缺失）时惰性重试一次
-	if a.pl == nil {
-		pl, err := a.newPipeline()
-		if err != nil {
-			a.setTask(func(x *Task) {
-				x.Status = StatusFailed
-				x.Err = "引擎未就绪: " + err.Error()
-			})
-			a.logEmit("error", t.Code+" 失败: 引擎未就绪: "+err.Error())
-			return err
-		}
-		a.pl = pl
-		a.pushLog("info", "引擎已就绪")
+	if a.configBlocked.Load() {
+		return fmt.Errorf("请先恢复配置")
 	}
 	a.setTask(func(x *Task) {
 		x.Status = StatusPending
@@ -234,8 +246,21 @@ func (a *App) runTask(t *Task) error {
 		x.DoneIdx, x.FailedIdx, x.Sweeping = nil, nil, false
 	})
 
+	// One immutable snapshot for every stage of this task.
+	pl := a.taskPipeline()
+	if err := pl.PrepareTask(true); err != nil {
+		return err
+	}
+	defer pl.Close()
+	taskCfg := pl.Cfg
+	if err := validateTaskSettings(t.Kind, taskCfg); err != nil {
+		a.setTask(func(x *Task) { x.Status = StatusFailed; x.Err = err.Error() })
+		a.logEmit("error", t.Code+" 未能开始: "+err.Error())
+		return err
+	}
+
 	// 归档方案：每篇文献在归档根下建独立档案夹（四类产物 + _process）
-	plan, err := pipeline.NewArchivePlan(a.cfg.Load().Export.OutputDir, t.SourcePath)
+	plan, err := pipeline.NewArchivePlan(taskCfg.Export.OutputDir, t.SourcePath)
 	if err != nil {
 		a.setTask(func(x *Task) {
 			x.Status = StatusFailed
@@ -248,23 +273,40 @@ func (a *App) runTask(t *Task) error {
 	var res *pipeline.Result
 	switch t.Kind {
 	case "pdf":
+		// 上次失败于排版阶段的重试：译文已归档且配置未变时仅重导出，
+		// 不重烧 MinerU / LLM 配额；守卫未过则照旧走全流程
+		if t.ResumeExport {
+			var attempted bool
+			res, attempted, err = pl.ResumeExport(a.queueCtx, plan)
+			if attempted {
+				break // 短路已成或导出本身失败（err 走统一失败路径），不再全流程
+			}
+		}
 		a.setTask(func(x *Task) {
 			x.Status = StatusParsing
 			x.Stage = "MinerU 精准解析"
 		})
-		res, err = a.pl.RunPDF(a.queueCtx, t.SourcePath, "", plan)
+		res, err = pl.RunPDF(a.queueCtx, t.SourcePath, "", plan)
 	case "md":
+		// 同 pdf：MD 任务失败于排版阶段的重试也可仅重导出
+		if t.ResumeExport {
+			var attempted bool
+			res, attempted, err = pl.ResumeExport(a.queueCtx, plan)
+			if attempted {
+				break
+			}
+		}
 		a.setTask(func(x *Task) {
 			x.Status = StatusTranslating
 			x.Stage = "翻译中"
 		})
-		res, err = a.pl.TranslateMD(a.queueCtx, t.SourcePath, "", plan)
+		res, err = pl.TranslateMD(a.queueCtx, t.SourcePath, "", plan)
 	case "export":
 		a.setTask(func(x *Task) {
 			x.Status = StatusRendering
 			x.Stage = "排版中"
 		})
-		res, err = a.pl.ExportMDPlan(a.queueCtx, t.SourcePath, plan)
+		res, err = pl.ExportMDPlan(a.queueCtx, t.SourcePath, plan)
 	default:
 		return fmt.Errorf("未知任务类型: %s", t.Kind)
 	}
@@ -290,6 +332,13 @@ func (a *App) runTask(t *Task) error {
 		x.RefsKept = res.KeptReferences
 	})
 	return nil
+}
+
+// taskPipeline binds a detached snapshot without changing the reusable callback set.
+func (a *App) taskPipeline() *pipeline.Pipeline {
+	p := *a.pl
+	p.Cfg = a.GetConfig()
+	return &p
 }
 
 // QueueAddPDF 入队 PDF 全流程任务（可一次传多个）。
@@ -361,10 +410,25 @@ func (a *App) QueueState() map[string]any {
 }
 
 // QueueStart 开始处理队列中的等待任务（跑完自动回到待开始）。
-func (a *App) QueueStart() {
+func (a *App) QueueStart() error {
+	if a.configBlocked.Load() {
+		return fmt.Errorf("请先恢复配置")
+	}
+	cfg, err := a.latestConfig()
+	if err != nil {
+		return err
+	}
+	for _, t := range a.queue.List() {
+		if t.Status == StatusPending {
+			if err := validateTaskSettings(t.Kind, cfg); err != nil {
+				return err
+			}
+		}
+	}
 	a.queue.Start()
 	a.afterQueueChange()
 	a.logEmit("info", "队列已开始")
+	return nil
 }
 
 // QueuePause 暂停队列：正在跑的这篇完整跑完，之后不再开始下一篇。
@@ -376,6 +440,20 @@ func (a *App) QueuePause() {
 
 // QueueStartOne 只开始一个等待中的任务（提到队首，跑完即停，其余任务不动）。
 func (a *App) QueueStartOne(id string) error {
+	if a.configBlocked.Load() {
+		return fmt.Errorf("请先恢复配置")
+	}
+	cfg, err := a.latestConfig()
+	if err != nil {
+		return err
+	}
+	for _, t := range a.queue.List() {
+		if t.ID == id {
+			if err := validateTaskSettings(t.Kind, cfg); err != nil {
+				return err
+			}
+		}
+	}
 	if err := a.queue.StartOne(id); err != nil {
 		return err
 	}
@@ -418,45 +496,10 @@ func (a *App) afterQueueChange() {
 // ---------------------------------------------------------------- 配置
 
 // GetConfig 返回当前配置（前端表单初值）。
-func (a *App) GetConfig() *config.Config { return a.cfg.Load() }
-
-// SaveConfig 用前端提交的配置原地更新并落盘（pipeline 共享指针，立即生效）。
-// 凭据无条件采纳提交值：前端表单是唯一写入方且总是回传完整值
-// （collectSettings 提交 token/key），清空保存即删除凭据。
-// 字体注册表与已选字体由后端保留（前端表单不管理这两项）。
-func (a *App) SaveConfig(newCfg *config.Config) error {
-	if newCfg == nil {
-		return fmt.Errorf("配置为空")
-	}
-	nc := *newCfg
-	nc.UserFonts = a.cfg.Load().UserFonts
-	nc.Export.UserFont = a.cfg.Load().Export.UserFont
-	if err := (&nc).Save(); err != nil {
-		return err
-	}
-	a.cfg.Store(&nc)
-	a.pushLog("info", "配置已保存")
-	return nil
-}
+func (a *App) GetConfig() *config.Config { return a.cfg.Load().Clone() }
 
 // IronRules 系统默认规则文本（前端「恢复默认」的还原源）。
 func (a *App) IronRules() string { return pipeline.IronRules }
-
-// SaveRules 只落盘翻译规则（多套预设 + 生效指向），与「保存设置」解耦。
-// 前端的规则卡保存、就地改名、切换生效、删除、新建都走这里。
-func (a *App) SaveRules(active string, presets []config.RulePreset) error {
-	if len(presets) == 0 {
-		return fmt.Errorf("至少保留一套规则预设")
-	}
-	nc := *a.cfg.Load()
-	nc.Rules.Active = active
-	nc.Rules.Presets = presets
-	if err := (&nc).Save(); err != nil {
-		return err
-	}
-	a.cfg.Store(&nc)
-	return nil
-}
 
 // PickFiles 打开原生多选文件对话框（PDF / MD）。取消或未选返回空切片。
 func (a *App) PickFiles() ([]string, error) {
@@ -477,93 +520,98 @@ func (a *App) PickFiles() ([]string, error) {
 // FontList 已导入字体列表。绑定层不变式：永不返回 nil——nil 会被序列化
 // 成 null，前端对返回值直接 .map 会崩。
 func (a *App) FontList() []config.UserFont {
-	if a.cfg.Load().UserFonts == nil {
+	list := a.GetConfig().UserFonts
+	if list == nil {
 		return []config.UserFont{}
 	}
-	return a.cfg.Load().UserFonts
+	return list
 }
 
 // FontAdd 导入字体文件（三连检）。
 func (a *App) FontAdd(path string) (config.UserFont, error) {
 	uf := config.UserFont{}
-	info, err := fonts.Validate(path)
-	if err != nil {
-		return uf, err
-	}
-	names := make([]string, 0, len(a.cfg.Load().UserFonts))
-	for _, u := range a.cfg.Load().UserFonts {
-		names = append(names, u.InternalName)
-	}
-	internal := fonts.InternalName(fonts.NextNumber(names))
-	info, err = fonts.Import(path, internal)
-	if err != nil {
-		return uf, err
-	}
-	uf = config.UserFont{InternalName: internal, DisplayName: info.DisplayName, FileName: info.FileName}
-	nc := *a.cfg.Load()
-	nc.UserFonts = append(append([]config.UserFont{}, a.cfg.Load().UserFonts...), uf)
-	if err := (&nc).Save(); err != nil {
-		_ = fonts.Remove(uf.FileName) // 回滚：不留孤儿字体文件
-		return uf, err
-	}
-	a.cfg.Store(&nc)
-	a.pushLog("info", fmt.Sprintf("字体已导入: %s", uf.DisplayName))
-	return uf, nil
+	imported := false
+	_, err := a.updateConfigWithRollback(func(c *config.Config) error {
+		info, err := fonts.Validate(path)
+		if err != nil {
+			return err
+		}
+		names := []string{}
+		for _, u := range c.UserFonts {
+			names = append(names, u.InternalName)
+		}
+		internal := fonts.InternalName(fonts.NextNumber(names))
+		info, err = fonts.Import(path, internal)
+		if err != nil {
+			return err
+		}
+		uf = config.UserFont{InternalName: internal, DisplayName: info.DisplayName, FileName: info.FileName}
+		imported = true
+		c.UserFonts = append(c.UserFonts, uf)
+		return nil
+	}, func() {
+		if imported {
+			_ = fonts.Remove(uf.FileName)
+		}
+	})
+	return uf, err
 }
 
 // SetFontPreset 切换正文字体预设并落盘。preset: lxgw | songti | yahei |
 // custom（userFont 为导入字体内部名）。字体栈与预设同步更新。
 func (a *App) SetFontPreset(preset, userFont string) error {
-	nc := *a.cfg.Load()
-	switch preset {
-	case "songti":
-		nc.Export.Font = `"Times New Roman", "SimSun", "Songti SC", "STSong", serif`
-	case "yahei":
-		nc.Export.Font = `"Arial", "Microsoft YaHei", "PingFang SC", sans-serif`
-	case "custom":
-		if userFont == "" {
-			return fmt.Errorf("custom 预设需要字体内部名")
+	_, err := a.updateConfig(func(nc *config.Config) error {
+		switch preset {
+		case "songti":
+			nc.Export.Font = `"Times New Roman", "SimSun", "Songti SC", "STSong", serif`
+		case "yahei":
+			nc.Export.Font = `"Arial", "Microsoft YaHei", "PingFang SC", sans-serif`
+		case "custom":
+			if userFont == "" {
+				return fmt.Errorf("custom 预设需要字体内部名")
+			}
+		default: // lxgw
+			preset = "lxgw"
+			nc.Export.Font = config.Default().Export.Font
 		}
-	default: // lxgw
-		preset = "lxgw"
-		nc.Export.Font = config.Default().Export.Font
-	}
-	nc.Export.FontPreset = preset
-	if userFont == "builtin" {
-		userFont = ""
-	}
-	if userFont != "" && nc.FindUserFont(userFont) == nil {
-		return fmt.Errorf("未找到字体 %s", userFont)
-	}
-	nc.Export.UserFont = userFont
-	if err := (&nc).Save(); err != nil {
-		return err
-	}
-	a.cfg.Store(&nc)
-	return nil
+		nc.Export.FontPreset = preset
+		if userFont == "builtin" {
+			userFont = ""
+		}
+		if userFont != "" && nc.FindUserFont(userFont) == nil {
+			return fmt.Errorf("未找到字体 %s", userFont)
+		}
+		nc.Export.UserFont = userFont
+		return nil
+	})
+	return err
 }
 
-// FetchModels 从上游 OpenAI 兼容接口拉取模型列表（GET {base_url}/models）。
-func (a *App) FetchModels() ([]string, error) {
-	base := strings.TrimRight(strings.TrimSpace(a.cfg.Load().LLM.BaseURL), "/")
-	if base == "" || strings.TrimSpace(a.cfg.Load().LLM.APIKey) == "" {
+// FetchModelsWithConfig 从上游 OpenAI 兼容接口拉取模型列表（GET {base_url}/models）。
+func (a *App) FetchModelsWithConfig(baseURL, apiKey string) ([]string, error) {
+	cfg := config.Default()
+	cfg.LLM.BaseURL = baseURL
+	cfg.LLM.APIKey = apiKey
+	cfg.Normalize()
+	base := cfg.LLM.BaseURL
+	if base == "" || cfg.LLM.APIKey == "" {
 		return nil, fmt.Errorf("请先填写模型 API 地址与 API Key")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("模型 API 地址格式无效")
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(a.cfg.Load().LLM.APIKey))
+	req.Header.Set("Authorization", "Bearer "+cfg.LLM.APIKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("请求上游失败: %v", err)
+		return nil, fmt.Errorf("请求上游失败，请检查地址、网络或证书")
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("上游返回 %d: %s", resp.StatusCode, string(body[:min(len(body), 180)]))
+		return nil, fmt.Errorf("模型列表接口返回 HTTP %d，请检查地址、凭据或服务状态", resp.StatusCode)
 	}
 	// 兼容两种形态：{"data":[{"id":...}]} 与 顶层数组 [{"id":...}] / ["name"]
 	var wrap struct {
@@ -639,11 +687,11 @@ func (a *App) CheckUpdate() (*UpdateInfo, error) {
 		return nil, fmt.Errorf("响应解析失败")
 	}
 	info := &UpdateInfo{
-		Current: version.Version,
+		Current: version.Display(),
 		Latest:  strings.TrimSpace(rel.TagName),
 		URL:     rel.HTMLURL,
 	}
-	info.HasUpdate = compareSemver(info.Latest, info.Current) > 0
+	info.HasUpdate = compareSemver(info.Latest, version.Version) > 0
 	return info, nil
 }
 
@@ -651,6 +699,7 @@ func (a *App) CheckUpdate() (*UpdateInfo, error) {
 func compareSemver(a, b string) int {
 	num := func(v string) (n [3]int) {
 		v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+		v = strings.SplitN(strings.SplitN(v, "+", 2)[0], "-", 2)[0]
 		for i, p := range strings.SplitN(v, ".", 3) {
 			n[i], _ = strconv.Atoi(strings.TrimSpace(p))
 		}
@@ -668,90 +717,39 @@ func compareSemver(a, b string) int {
 	return 0
 }
 
-// TestLLM 测试翻译模型接口连通性：复用 /models 拉取，返回可用模型数。
-func (a *App) TestLLM() (int, error) {
-	models, err := a.FetchModels()
-	if err != nil {
-		return 0, err
-	}
-	return len(models), nil
-}
-
-// TestMinerU 测试 MinerU Token 有效性：以假 batch id 查询，借鉴权层差异判定
-// （Token 无效 → 401/403/A0202；有效 → 业务层"任务不存在"类错误，同样证明通过鉴权）。
-func (a *App) TestMinerU() (string, error) {
-	token := strings.TrimSpace(a.cfg.Load().MinerU.Token)
-	if token == "" {
-		return "", fmt.Errorf("请先填写 API Token")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	url := "https://mineru.net/api/v4/extract-results/batch/conn-test"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("网络不通: %v", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return "", fmt.Errorf("Token 无效（鉴权被拒，HTTP %d）", resp.StatusCode)
-	}
-	// 判据结构化解析：code（数字或数组）含 401/403，或 A0202 → 无效；
-	// code 缺失/null/200/0 → 有效；解析失败或其它数值 → 「无法识别」
-	//（不再把任意 200 判有效，也不再凭子串匹配误判 1401 类数值）
-	var probe struct {
-		Code json.RawMessage `json:"code"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return "", fmt.Errorf("响应无法识别（非 JSON，HTTP %d），请人工确认 Token 状态", resp.StatusCode)
-	}
-	if strings.Contains(string(body), "A0202") {
-		return "", fmt.Errorf("Token 无效（鉴权被拒，HTTP %d）", resp.StatusCode)
-	}
-	codeBad, codeOK := parseConnTestCode(probe.Code)
-	switch {
-	case codeBad:
-		return "", fmt.Errorf("Token 无效（鉴权被拒，HTTP %d）", resp.StatusCode)
-	case codeOK:
-		return "Token 有效", nil
-	}
-	return "", fmt.Errorf("接口返回无法识别的 code=%s，请人工确认 Token 状态", strings.TrimSpace(string(probe.Code)))
-}
-
 // parseConnTestCode 解析 conn-test 响应的 code 字段（标量数字或数组均可）。
 // 返回 (无效, 有效) 两个判定：含 401/403 → 无效；含 200/0 → 有效；
-// code 为 null/缺失 → 有效；解析失败 → 双 false（调用方报「无法识别」）。
+// code 为 null/缺失 → 不确认有效；解析失败 → 双 false（调用方报「无法识别」）。
 func parseConnTestCode(raw json.RawMessage) (bad, ok bool) {
 	t := strings.TrimSpace(string(raw))
 	if t == "" || t == "null" {
-		return false, true
+		return false, false
 	}
-	var codes []float64
+	var codes []json.RawMessage
 	if t[0] == '[' {
 		if json.Unmarshal(raw, &codes) != nil {
 			return false, false
 		}
 	} else {
-		var v float64
-		if json.Unmarshal(raw, &v) != nil {
-			return false, false
-		}
-		codes = []float64{v}
+		codes = []json.RawMessage{raw}
 	}
-	for _, n := range codes {
+	unknown := false
+	for _, rawCode := range codes {
+		var n float64
+		if string(rawCode) == "null" || json.Unmarshal(rawCode, &n) != nil {
+			unknown = true
+			continue
+		}
 		switch n {
 		case 401, 403:
 			bad = true
 		case 200, 0:
 			ok = true
+		default:
+			unknown = true
 		}
 	}
-	return bad, ok
+	return bad, ok && !unknown
 }
 
 // PickFontFile 打开单选字体文件对话框（ttf / otf）。取消返回空串。

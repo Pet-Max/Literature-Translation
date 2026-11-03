@@ -1,7 +1,5 @@
-// legacy_parity_test.go — v1.1.1 自带单元测试（engine/tests/test_core.py）
-// 的 Go 移植版：逐用例对照，保证移植后测试覆盖不低于母本。
-// 黄金对拍（migration_test/events_golden_test）证明行为等价，本文件
-// 证明 v1.1.1 关心的每个边界分支在 Go 侧同样成立。
+// legacy_parity_test.go — 兼容既有引擎的边界行为。
+// 与 migration_test/events_golden_test 的结果对拍共同覆盖冻结、分段和断点边界。
 package engine
 
 import (
@@ -56,6 +54,15 @@ func TestLegacyFreezer(t *testing.T) {
 	t.Run("公式密集段落", func(t *testing.T) {
 		rt("由 $\\hbar\\omega$ 与 $$E=\\hbar\\omega$$ 及 $k_B T$ 组成。")
 	})
+}
+
+func TestNestedFreezeRestoresExactly(t *testing.T) {
+	for _, s := range []string{`<table><tr><td>$$a_b$$ and $c$ <img src="x.png"></td></tr></table>`, "literal ⟦F1⟧ and $$x$$", "```text\n$table$\n```"} {
+		f := Freeze(s, 1)
+		if got := Unfreeze(f.Text, f.Mapping); got != s {
+			t.Fatalf("got %q want %q", got, s)
+		}
+	}
 }
 
 // ---------------------------------------------------------------- segmenter

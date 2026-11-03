@@ -29,6 +29,10 @@ export function startOverlayServer(port = PREVIEW_PORT) {
   return new Promise((resolve) => {
     const srv = http.createServer((req, res) => {
       const p = decodeURIComponent(new URL(req.url, "http://x").pathname);
+      if (p === "/userfonts/mock.ttf") {
+        res.writeHead(302, { "Location": "/assets/lxgw/files/lxgwwenkai-regular-subset-119.woff2" });
+        return res.end();
+      }
       if (p === "/favicon.ico") { res.writeHead(204); return res.end(); }
       if (p === "/" || p === "/index.html") {
         // dist 原文件 + 注入 mock 壳（gui_shim 定义 window.go，必须在 main.js 之前）

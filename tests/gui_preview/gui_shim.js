@@ -12,30 +12,30 @@ const UPDATEFAIL = new URLSearchParams(location.search).has("updatefail");
 const MOCK_TASKS = [
   {
     id: "T0", code: "K003", kind: "md",
-    source_path: "D:\文献全文\04_候选待核验\K003_Using the Environment to Understand non-Markovian Open Quantum Systems.md",
+    source_path: "D:" + _bs + "Demo" + _bs + "Library" + _bs + "K003_example.md",
     status: "等待", stage: "等待处理",
     done: 0, total: 0, failed: 0, refs_kept: 0,
     out_pdf: "", zh_md: "", work_dir: "", err: "",
   },
   {
     id: "T1", code: "L044", kind: "md",
-    source_path: "D:" + _bs + "文献全文" + _bs + "03_方法与边界" + _bs + "L044_Coherent heat transfer leads to genuine quantum enhancement_2404.05799v2.md",
+    source_path: "D:" + _bs + "Demo" + _bs + "Library" + _bs + "L044_example.md",
     status: "翻译中", stage: "翻译中",
     done: 12, total: 34, failed: 0, refs_kept: 0,
     out_pdf: "", zh_md: "", work_dir: "", err: "",
   },
   {
     id: "T2", code: "L001", kind: "pdf",
-    source_path: "D:" + _bs + "文献全文" + _bs + "01_直接竞争" + _bs + "L001_Full counting statistics_2212.11307v1.pdf",
+    source_path: "D:" + _bs + "Demo" + _bs + "Library" + _bs + "L001_example.pdf",
     status: "完成", stage: "完成",
     done: 37, total: 37, failed: 0, refs_kept: 26,
-    out_pdf: "D:" + _bs + "翻译验证" + _bs + "L001_zh.pdf",
-    zh_md: "D:" + _bs + "翻译验证" + _bs + "L001_zh.md",
-    work_dir: "D:" + _bs + "翻译验证", err: "",
+    out_pdf: "D:" + _bs + "Demo" + _bs + "Library" + _bs + "L001" + _bs + "L001_zh.pdf",
+    zh_md: "D:" + _bs + "Demo" + _bs + "Library" + _bs + "L001" + _bs + "L001_zh.md",
+    work_dir: "D:" + _bs + "Demo" + _bs + "Library" + _bs + "L001", err: "",
   },
   {
     id: "T3", code: "L016", kind: "pdf",
-    source_path: "D:" + _bs + "文献全文" + _bs + "02_核心必读" + _bs + "L016_Example paper_2023v1.pdf",
+    source_path: "D:" + _bs + "Demo" + _bs + "Library" + _bs + "L016_example.pdf",
     status: "失败", stage: "解析中",
     done: 0, total: 0, failed: 0, refs_kept: 0,
     out_pdf: "", zh_md: "", work_dir: "",
@@ -76,64 +76,97 @@ const MOCK_CFG = {
   user_fonts: [],
 };
 
-window.go = { app: { App: {
+// Persist a detached mock configuration across reloads, with injectable failures/delays.
+const cloneMock = v => JSON.parse(JSON.stringify(v));
+const savedMock = sessionStorage.getItem("literature-settings-mock");
+if (savedMock) Object.assign(MOCK_CFG, JSON.parse(savedMock));
+window.__settingsMock = {failSaves:false, delay:0, calls:[], closed:false, ready:false};
+const mockState = window.__settingsMock;
+ mockState.corrupt = new URLSearchParams(location.search).has("corrupt");
+ mockState.hasBackup = true;
+const mergeMock = (a,b) => { const out = {...a}; for (const [k,v] of Object.entries(b)) out[k] = v && typeof v === "object" && !Array.isArray(v) ? mergeMock(a[k] || {},v) : v; return out; };
+const waitMock = () => new Promise(r => setTimeout(r,mockState.delay));
+const cleanMock = s => String(s || "").trim().replace(/^"|"$/g, "").replace(/^bearer\s+/i, "").trim();
+const mockApp = {
   QueueList: async () => TASKS,
-  QueueAddPDF: async (paths, mode) => [],
+  QueueAddPDF: async () => [],
   QueueAddMD: async (paths, mode) => {
     for (const p of paths || []) {
       const zh = /中文|_zh/.test(p) || mode === "export";
-      TASKS.push({
-        id: "T" + Date.now() + Math.random().toString(36).slice(2, 5),
-        code: "X001", kind: mode === "export" || zh ? "export" : "md",
-        mode: mode || "auto",
-        source_path: p, status: "等待", stage: "待开始",
-        done: 0, total: 0, failed: 0, refs_kept: 0,
-        out_pdf: "", zh_md: "", work_dir: "", err: "",
-      });
+      TASKS.push({id:"T"+Date.now()+Math.random(),code:"X001",kind:mode === "export" || zh ? "export":"md",mode:mode || "auto",source_path:p,status:"等待",stage:"待开始",done:0,total:0,failed:0,refs_kept:0,out_pdf:"",zh_md:"",work_dir:"",err:""});
     }
     return [];
   },
   QueueRetry: async () => null,
   QueueClearFinished: async () => [],
-  TestLLM: async () => 15,
-  TestMinerU: async () => "Token 有效",
-  GetConfig: async () => MOCK_CFG,
+  GetConfig: async () => cloneMock(MOCK_CFG),
+  GetConfigLoadState: async () => ({ready:!mockState.corrupt,message:mockState.corrupt ? "配置读取失败，原文件已保留" : "",has_backup:!!mockState.hasBackup}),
+  RecoverConfig: async action => {
+    mockState.calls.push({method:"recover",action});
+    if (mockState.recoveryFails || (action==="reload" && mockState.corrupt)) throw new Error("模拟恢复失败");
+    if(action==="restore_backup" && !mockState.hasBackup) throw new Error("没有有效备份");
+    if (mockState.recoveryConfig) Object.assign(MOCK_CFG,cloneMock(mockState.recoveryConfig));
+    mockState.corrupt=false;
+    sessionStorage.setItem("literature-settings-mock",JSON.stringify(MOCK_CFG));
+    return cloneMock(MOCK_CFG);
+  },
+  UpdateSettings: async patch => {
+    const captured = cloneMock(patch); mockState.calls.push({method:"save",patch:captured});
+    await waitMock();
+    if (mockState.failSaves || mockState.corrupt) throw new Error("模拟磁盘写入失败");
+    const next = mergeMock(MOCK_CFG,captured);
+    if (next.glossary_rows) next.glossary = next.glossary_rows.filter(g=>g.en.trim() && g.zh.trim()).map(g=>({en:g.en.trim(),zh:g.zh.trim()}));
+    next.mineru.token = cleanMock(next.mineru.token); next.llm.api_key = cleanMock(next.llm.api_key);
+    next.llm.base_url = next.llm.base_url.trim().replace(/\/+$/, "");
+    Object.assign(MOCK_CFG,next);
+    sessionStorage.setItem("literature-settings-mock",JSON.stringify(MOCK_CFG));
+    return cloneMock(MOCK_CFG);
+  },
+  TestLLMWithConfig: async (url,key) => {
+    mockState.calls.push({method:"llm",url,key}); await waitMock();
+    return {status:"ok",message:"模型列表接口连通 · 15 个模型",model_count:15};
+  },
+  TestMinerUWithConfig: async token => {
+    const result=cloneMock(mockState.mineruResult || {status:"info",message:"服务已响应，解析功能待验证"});
+    mockState.calls.push({method:"mineru",token}); await waitMock();
+    return result;
+  },
+  FetchModelsWithConfig: async (url,key) => {
+    const models=cloneMock(mockState.models || ["glm-4.6","glm-5.3-flash","glm-5.3","deepseek-v3"]);
+    mockState.calls.push({method:"models",url,key}); await waitMock(); return models;
+  },
   Version: async () => "v1.0.5",
   CheckUpdate: async () => UPDATEFAIL
     ? Promise.reject("无法连接 GitHub（检查网络后重试）: Get \"https://api.github.com/repos/Pet-Max/Literature-Translation/releases/latest\": dial tcp 203.0.113.9:443: i/o timeout")
-    : { has_update: false, current: "v1.0.5", latest: "v1.0.5", url: "" },
-  SaveConfig: async () => true,
+    : {has_update:false,current:"v1.0.5",latest:"v1.0.5",url:""},
   IronRules: async () => MOCK_IRON,
   PickFiles: async () => [],
-  FetchModels: async () => ["glm-4.6","glm-5.3-flash","glm-5.3","deepseek-v3"],
-  QueueState: async () => ({ running: false, paused: true, pending: EMPTY ? 0 : 2 }),
-  QueueStart: async () => true,
+  QueueState: async () => ({running:false,paused:true,pending:EMPTY ? 0:2}),
+  QueueStart: async () => { mockState.calls.push({method:"start",config:cloneMock(MOCK_CFG)}); },
   QueuePause: async () => true,
-  QueueStartOne: async (id) => true,
-  SaveRules: async (active, presets) => { MOCK_CFG.rules = { active, presets, user_global: "" }; return true; },
-  FontList: async () => (FONTNULL ? null : []),
-  FontAdd: async () => ({}),
-  SetFontPreset: async (preset, uf) => { MOCK_CFG.export.font_preset = preset; MOCK_CFG.export.user_font = uf; return true; },
-  PickFontFile: async () => "",
-  GetLogTail: async () => MOCK_LOGS,
-  ClearLog: async () => { MOCK_LOGS.splice(0); },
-  OpenPath: async () => true,
-}}};
-
-const rtState = { maximised: false };
-
-window.runtime = {
-  EventsOn: (name, cb) => {
-    (window.__evt = window.__evt || {})[name] = cb;
-    if (name === "task:update" && !EMPTY) {
-      // 模拟一次进度推进，展示动态卡片
-      setTimeout(() => { MOCK_TASKS[0].done = 15; cb(MOCK_TASKS[0]); }, 1200);
-    }
+  QueueStartOne: async () => true,
+  FontList: async () => FONTNULL ? null : cloneMock(MOCK_CFG.user_fonts),
+  FontAdd: async () => {
+    mockState.calls.push({method:"font-import"}); await waitMock();
+    if (mockState.failSaves) throw new Error("模拟字体写入失败");
+    const uf={internal_name:"MockFont",display_name:"Mock Font",file_name:"mock.ttf"};
+    MOCK_CFG.user_fonts.push(uf);
+    sessionStorage.setItem("literature-settings-mock",JSON.stringify(MOCK_CFG));
+    return cloneMock(uf);
   },
-  OnFileDrop: () => {},
-  BrowserOpenURL: () => {},
-  WindowMinimise: () => {},
-  WindowToggleMaximise: () => { rtState.maximised = !rtState.maximised; },
-  WindowIsMaximised: async () => rtState.maximised,
-  Quit: () => {},
+  SetFontPreset: async (preset,uf) => { if (mockState.failSaves) throw new Error("模拟字体保存失败"); await mockApp.UpdateSettings({export:{font_preset:preset,user_font:uf}}); },
+  PickFontFile: async () => "mock.ttf",
+  FrontendReady: async () => {mockState.ready=true;},
+  FinishSettingsClose: async () => {mockState.closed=true;},
+  GetLogTail: async () => MOCK_LOGS,
+  ClearLog: async () => {MOCK_LOGS.splice(0);},
+  OpenPath: async () => true,
+};
+window.go = {app:{App:mockApp}};
+const rtState={maximised:false};
+window.runtime={
+  EventsOn:(name,cb)=>{(window.__evt=window.__evt || {})[name]=cb; if(name === "task:update" && !EMPTY) setTimeout(()=>{MOCK_TASKS[0].done=15;cb(MOCK_TASKS[0]);},1200);},
+  OnFileDrop:()=>{},BrowserOpenURL:()=>{},WindowMinimise:()=>{},
+  WindowToggleMaximise:()=>{rtState.maximised=!rtState.maximised;},WindowIsMaximised:async()=>rtState.maximised,
+  Quit:()=>{ window.__evt?.["settings:before-close"]?.(); },
 };

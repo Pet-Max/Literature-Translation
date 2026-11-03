@@ -1,16 +1,16 @@
 // Package pdftext 抽取 PDF 文本层（PDFium，webassembly 内嵌运行时）。
 //
-// Python 边车（v1.1.1 引擎）的 op_pdf_text 文本抽取由本包进程内直调替代。
+// 在进程内抽取文本，不依赖外部解释器。
 // 用于语言预检与拼写校准：原文本层是干净参照。
 //
-// 与 v1.1.1 引擎 op_pdf_text 的行为对齐：
+// 文本抽取遵循以下规范：
 //   - 逐页抽取后以 "\n" 连接；
 //   - 连字码点还原（ﬀ→ff 等 7 条；pdfium 通常直接输出展开字形，此处
 //     为其它字体兜底）；
 //   - "组合删除符+等号"（U+0338=）归一为 ≠；
 //   - pdfium 特有差异归一：行尾 \r\n → \n；行尾断词被 pdfium 合并并以
-//     U+FFFE 标记，还原为 "-\n"（与 v1.1.1 引擎输出同形，供 repair 包的
-//     dehyphenate 三分法按母本逻辑工作）。
+//     U+FFFE 标记，还原为 "-\n"（供 repair 包的
+//     断词校准遵循既有规则）。
 package pdftext
 
 import (
@@ -105,13 +105,13 @@ func ExtractText(pdfPath string) (string, error) {
 		instance.FPDF_ClosePage(&requests.FPDF_ClosePage{Page: page.Page})
 	}
 
-	// pdfium 行尾为 \r\n；统一为 v1.1.1 引擎抽取口径的 \n
+	// pdfium 行尾为 \r\n；统一为 \n
 	text := strings.ReplaceAll(strings.Join(pages, "\n"), "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	// 连字码点还原；CM 字体还会把 ≠ 映射为"组合删除符+等号"，一并归一
 	text = ligatures.Replace(text)
 	text = strings.ReplaceAll(text, "\u0338=", "\u2260")
-	// pdfium 的行尾断词合并标记还原为 v1.1.1 引擎输出同形的 "-\n"
+	// pdfium 的行尾断词合并标记还原为 "-\n"
 	text = strings.ReplaceAll(text, "\uFFFE", "-\n")
 	return text, nil
 }

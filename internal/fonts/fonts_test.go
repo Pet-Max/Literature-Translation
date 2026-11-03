@@ -3,7 +3,10 @@ package fonts
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"literature-translation/internal/config"
 )
 
 func testFontPath(t *testing.T) string {
@@ -65,11 +68,57 @@ func TestImportCopiesFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("导入失败: %v", err)
 	}
-	if info.FileName != "UserFont-1.ttf" {
+	if !strings.HasPrefix(info.FileName, "UserFont-1-") || !strings.HasSuffix(info.FileName, ".ttf") {
 		t.Errorf("文件名 = %q", info.FileName)
 	}
 	dir, _ := Dir()
 	if _, err := os.Stat(filepath.Join(dir, info.FileName)); err != nil {
 		t.Errorf("字体库中找不到文件: %v", err)
+	}
+}
+
+func TestStoreFailuresPreserveFontFiles(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	source := testFontPath(t)
+	if _, err := config.Update(func(*config.Config) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := config.Path()
+	if err := os.Mkdir(p+".bak", 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(source); err == nil {
+		t.Fatal("import accepted failed commit")
+	}
+	dir, _ := Dir()
+	files, err := os.ReadDir(dir)
+	if err != nil || len(files) != 0 {
+		t.Fatal("rollback left font file", err)
+	}
+	if err := os.Remove(p + ".bak"); err != nil {
+		t.Fatal(err)
+	}
+	uf, err := Add(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Select(uf.InternalName); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p + ".bak"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(p+".bak", 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := Unregister(uf.InternalName); err == nil {
+		t.Fatal("unregister accepted failed commit")
+	}
+	c, err := config.Load()
+	if err != nil || c.FindUserFont(uf.InternalName) == nil || c.Export.UserFont != uf.InternalName {
+		t.Fatal("metadata lost on failed unregister", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, uf.FileName)); err != nil {
+		t.Fatal("file lost on failed unregister", err)
 	}
 }

@@ -1,15 +1,14 @@
 // freezer.go — 公式/代码/图片/表格冻结为占位符，译后回填。
 //
-// 自 v1.1.1 引擎母本移植（102 行）。占位符用 U+27E6/U+27E7（数学白
+// 占位符用 U+27E6/U+27E7（数学白
 // 方括号），学术正文几乎不会出现。
 //
 // 冻结顺序：代码块 → 行间公式 $$…$$ → HTML 表格 → HTML img →
 // Markdown 图片 → 行内公式 $…$。顺序先长后短，防止大块内部的小模式
 // 被先替换导致截断。
 //
-// 移植注意：Python 的字符串长度/下标按"字符"计，Go 按字节计——本文件
-// 对外的一切区间（ProtectedSpans）与内部切分一律用 rune 坐标，与 Python
-// 字符坐标逐一对齐；标准库 regexp 返回字节下标，经 runeIndex 换算。
+// 对外区间（ProtectedSpans）与内部切分一律使用 rune 字符坐标；
+// 标准库 regexp 返回的字节下标经 runeIndex 换算，保证多字节字符位置正确。
 package engine
 
 import (
@@ -17,6 +16,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	regexp2 "github.com/dlclark/regexp2"
@@ -26,7 +26,7 @@ import (
 var PlaceholderRE = regexp.MustCompile(`⟦F(\d+)⟧`)
 
 // freezePatterns 各类冻结模式，顺序即冻结顺序（先长块后短块）。
-// 均为 RE2 兼容（Python 母本 freezer.py:_PATTERNS）。
+// 这些模式使用 RE2 语法，行内公式单独处理。
 var freezePatterns = []*regexp.Regexp{
 	// 围栏代码块 ```…``` 或 ~~~…~~~（可跨行）
 	regexp.MustCompile("(?sm)^(?:```|~~~).*?(?:```|~~~)$"),
@@ -96,8 +96,14 @@ func Freeze(text string, start int) Frozen {
 	mapping := make(map[int]string)
 	counter := start
 	sub := func(matched string) string {
-		mapping[counter] = matched
+		// 展开本次外层匹配内已冻结的区段，避免映射相互嵌套。
+		original := Unfreeze(matched, mapping)
 		ph := fmt.Sprintf("⟦F%d⟧", counter)
+		for strings.Contains(text, ph) {
+			counter++
+			ph = fmt.Sprintf("⟦F%d⟧", counter)
+		}
+		mapping[counter] = original
 		counter++
 		return ph
 	}

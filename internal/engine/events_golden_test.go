@@ -1,4 +1,4 @@
-// events_golden_test.go — M4 对拍：Go 引擎主循环 vs Python 边车母本
+// events_golden_test.go — 历史进度事件与任务指纹兼容性回归
 // （engine.py op_translate），在相同 mock LLM、相同输入、concurrency=1
 // 下的进度事件流与最终结果逐字段一致；任务指纹 BuildCacheKey 与
 // Python chunk_hash(json.dumps(..., sort_keys=True)) 逐字节一致。
@@ -8,6 +8,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -87,7 +88,7 @@ func TestTranslateEventStreamGolden(t *testing.T) {
 
 			outPath := filepath.Join(t.TempDir(), "evt_zh.md")
 			var gotEvents []Event
-			res, err := Translate(TranslateOptions{
+			res, err := TranslateContext(context.Background(), TranslateOptions{
 				MDText:         g.MD,
 				OutPath:        outPath,
 				ProgressPath:   outPath + ".progress.jsonl",
@@ -213,7 +214,7 @@ func ioReadAll(r *http.Request) ([]byte, error) {
 	}
 }
 
-// TestBuildCacheKeyGolden 任务指纹与 Python 母本逐字节一致。
+// TestBuildCacheKeyGolden 任务指纹与历史黄金样例逐字节一致。
 func TestBuildCacheKeyGolden(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", "events_golden.json"))
 	if err != nil {

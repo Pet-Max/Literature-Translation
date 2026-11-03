@@ -45,16 +45,19 @@ function renderAll() {
     try {
       katex.render(tex, el, {
         displayMode: el.classList.contains("ktx-disp"),
-        throwOnError: false,
+        throwOnError: true,
         macros: { "\\pmb": "\\boldsymbol", "\\bm": "\\boldsymbol" }
       });
-      if (el.querySelector(".merror")) {
+      if (el.querySelector(".katex-error, .merror")) {
         window.__renderStats.errors.push("merror: " + el.textContent.slice(0, 40));
       } else {
         window.__renderStats.rendered++;
       }
     } catch (e) {
       window.__renderStats.errors.push(String(e).slice(0, 80));
+      el.classList.add("formula-error");
+      el.setAttribute("role", "alert");
+      el.textContent = "公式渲染失败：" + tex;
     }
   });
 }

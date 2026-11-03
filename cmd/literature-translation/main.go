@@ -66,12 +66,12 @@ func usage() {
   literature-translation font add|list|use|remove  字体管理
 
 配置文件: %%APPDATA%%\Literature Translation\config.json
-`, version.Version)
+`, version.Display())
 }
 
 // newPipeline 构建 CLI 回调（终端输出）的编排器。
 func newPipeline(cfg *config.Config) (*pipeline.Pipeline, error) {
-	return pipeline.New(cfg, pipeline.Callbacks{
+	pl, err := pipeline.New(cfg, pipeline.Callbacks{
 		Log: cliLog,
 		Progress: func(done, total, failed int, doneIdx, failedIdx []int, sweep bool) {
 			tag := ""
@@ -87,6 +87,13 @@ func newPipeline(cfg *config.Config) (*pipeline.Pipeline, error) {
 			progressPending = true
 		},
 	})
+	if err != nil {
+		return nil, err
+	}
+	if err = pl.PrepareTask(false); err != nil {
+		return nil, err
+	}
+	return pl, nil
 }
 
 // progressPending 标记 \r 行尚未换行，下一条日志前先补换行。
@@ -120,6 +127,7 @@ func checkCmd() error {
 	if err != nil {
 		return err
 	}
+	defer p.Close()
 	cp, _ := config.Path()
 	fmt.Println("配置文件:", cp)
 	return p.Check()
@@ -157,6 +165,7 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer p.Close()
 	ctx, cancel := signalCtx()
 	defer cancel()
 
@@ -205,6 +214,7 @@ func translateCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer p.Close()
 	ctx, cancel := signalCtx()
 	defer cancel()
 
@@ -235,6 +245,7 @@ func calibrateCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	defer p.Close()
 	ctx, cancel := signalCtx()
 	defer cancel()
 
@@ -242,8 +253,8 @@ func calibrateCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("✓ 校准完成：修正 %d，合并 %d，拆分 %d，符号 %d，上下文 %d，表格 %d，重音符 %d，控制码 %d，行间公式 %d（原文备份 %s.bak）\n",
-		st.Fixed, st.Merged, st.Split, st.Syms, st.Ctx, st.Tables, st.Accents, st.Ctrl, st.Display, fs.Arg(0))
+	fmt.Printf("✓ 校准完成：修正 %d，合并 %d，拆分 %d，符号 %d，上下文 %d，表格 %d，重音符 %d，控制码 %d，行间公式 %d，上下标 %d，数学区 %d（原文备份 %s.bak）\n",
+		st.Fixed, st.Merged, st.Split, st.Syms, st.Ctx, st.Tables, st.Accents, st.Ctrl, st.Display, st.SupSub, st.MathFix, fs.Arg(0))
 	for _, d := range st.Details {
 		fmt.Println("   ", d)
 	}
@@ -288,7 +299,10 @@ func printCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	_, err = p.ExportMD(context.Background(), fs.Arg(0), *out, toc, twoCol)
+	defer p.Close()
+	ctx, cancel := signalCtx()
+	defer cancel()
+	_, err = p.ExportMD(ctx, fs.Arg(0), *out, toc, twoCol)
 	return err
 }
 
@@ -314,21 +328,11 @@ func fontCmd(args []string) error {
 		for _, w := range info.Warnings {
 			fmt.Println("⚠", w)
 		}
-		n := fonts.NextNumber(internalNames(cfg))
-		internal := fonts.InternalName(n)
-		info, err = fonts.Import(args[1], internal)
+		uf, err := fonts.Add(args[1])
 		if err != nil {
 			return err
 		}
-		cfg.UserFonts = append(cfg.UserFonts, config.UserFont{
-			InternalName: internal,
-			DisplayName:  info.DisplayName,
-			FileName:     info.FileName,
-		})
-		if err := cfg.Save(); err != nil {
-			return err
-		}
-		fmt.Printf("✓ 已导入并注册为 %s（用 literature-translation font use %s 启用）\n", internal, internal)
+		fmt.Printf("✓ 已导入并注册为 %s\n", uf.InternalName)
 	case "list":
 		if len(cfg.UserFonts) == 0 {
 			fmt.Println("（无导入字体）")
@@ -346,59 +350,25 @@ func fontCmd(args []string) error {
 			return fmt.Errorf("用法: literature-translation font use <内部名|none>")
 		}
 		name := args[1]
-		if name != "none" && cfg.FindUserFont(name) == nil {
-			return fmt.Errorf("未找到字体 %s（literature-translation font list 查看）", name)
-		}
 		if name == "none" {
 			name = ""
 		}
-		cfg.Export.UserFont = name
-		if err := cfg.Save(); err != nil {
+		if err := fonts.Select(name); err != nil {
 			return err
 		}
-		if name == "" {
-			fmt.Println("✓ 已恢复默认字体（文楷内嵌）")
-		} else {
-			fmt.Printf("✓ 导出正文将使用 %s\n", name)
-		}
+		fmt.Println("✓ 字体选择已保存")
 	case "remove":
 		if len(args) != 2 {
 			return fmt.Errorf("用法: literature-translation font remove <内部名>")
 		}
-		uf := cfg.FindUserFont(args[1])
-		if uf == nil {
-			return fmt.Errorf("未找到字体 %s", args[1])
-		}
-		if err := fonts.Remove(uf.FileName); err != nil && !os.IsNotExist(err) {
+		if err := fonts.Unregister(args[1]); err != nil {
 			return err
 		}
-		removed := uf.InternalName
-		kept := cfg.UserFonts[:0]
-		for _, u := range cfg.UserFonts {
-			if u.InternalName != removed {
-				kept = append(kept, u)
-			}
-		}
-		cfg.UserFonts = kept
-		if cfg.Export.UserFont == removed {
-			cfg.Export.UserFont = ""
-		}
-		if err := cfg.Save(); err != nil {
-			return err
-		}
-		fmt.Printf("✓ 已移除 %s\n", removed)
+		fmt.Printf("✓ 已移除 %s\n", args[1])
 	default:
 		return fmt.Errorf("未知子命令: literature-translation font %s", args[0])
 	}
 	return nil
-}
-
-func internalNames(cfg *config.Config) []string {
-	names := make([]string, 0, len(cfg.UserFonts))
-	for _, uf := range cfg.UserFonts {
-		names = append(names, uf.InternalName)
-	}
-	return names
 }
 
 func must(s string, err error) string {

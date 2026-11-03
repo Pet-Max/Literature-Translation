@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'">
 <title>Literature Translation</title>
-<link rel="stylesheet" href="./styles.css?v=063">
+<link rel="stylesheet" href="./styles.css?v=1.2.1">
 <link rel="stylesheet" href="/assets/katex/katex.min.css">
 <link rel="stylesheet" href="/assets/lxgw/lxgwwenkai-regular.css">
 <link rel="stylesheet" href="/assets/lxgw/lxgwwenkai-bold.css">
@@ -53,11 +53,11 @@
       <svg viewBox="0 0 24 24"><path d="M7 4v16M7 4h11l-2.5 4L18 12H7"/></svg>日志
     </button>
     <div class="sidebar-foot">
-      <a class="repo-link" id="repo-link" href="https://github.com/Pet-Max/Literature-Translation" title="GitHub 仓库 Pet-Max/Literature-Translation">
+      <a class="repo-link" id="repo-link" href="https://github.com/Pet-Max/Literature-Translation" title="项目主页 · Pet-Max/Literature-Translation">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-        <span>@Pet-Max</span>
+        <span>项目主页</span>
       </a>
-      <div id="sidebar-status">引擎启动中…</div>
+      <div id="sidebar-status" role="status" aria-live="polite">引擎启动中…</div>
     </div>
   </nav>
 
@@ -93,9 +93,18 @@
     <!-- ============ 视图：设置 ============ -->
     <section class="view" id="view-settings">
       <div class="view-title">设置</div>
-      <div class="view-desc">改动汇总在底部保存栏，保存后对新任务生效；凭据保存在本机。</div>
+      <div class="view-desc">设置自动保存，对后续启动的任务生效；凭据保存在本机。</div>
 
-      <div class="set-card">
+      <div class="set-card" id="config-recovery" role="alert" hidden>
+        <h3>配置需要恢复</h3>
+        <p id="config-recovery-message"></p>
+        <div class="inline-btns">
+          <button class="btn" data-recover="reload">重新读取</button>
+          <button class="btn" data-recover="restore_backup">恢复有效备份</button>
+          <button class="btn" data-recover="reset">备份损坏文件并重建</button>
+        </div>
+      </div>
+      <div class="set-card" data-section="service">
         <h3>服务连接</h3>
         <div class="card-hint">MinerU 解析与翻译模型凭据 · <a class="mini-link" id="mineru-link" href="https://mineru.net/apiManage/token">前往 API 管理 ↗</a></div>
         <div class="fgrid">
@@ -118,21 +127,21 @@
         </div>
       </div>
 
-      <div class="set-card">
+      <div class="set-card" data-section="rules">
         <h3>翻译规则</h3>
-        <div class="card-hint">多套预设 · 「生效中」对下一个任务起作用</div>
+        <div class="card-hint">正文自动保存为草稿 · 应用后对后续启动的任务生效</div>
         <div class="rule-list" id="rule-list"></div>
         <button class="btn ghost-sm" id="btn-rule-add" style="margin-top:10px">＋ 新建预设</button>
       </div>
 
-      <div class="set-card">
+      <div class="set-card" data-section="glossary">
         <h3>术语表</h3>
         <div class="card-hint">附在每段的翻译指令中</div>
         <div class="glossary" id="glossary-box"></div>
         <button class="btn ghost-sm g-add" id="g-add" style="margin-top:10px">＋ 添加术语</button>
       </div>
 
-      <div class="set-card">
+      <div class="set-card" data-section="layout">
         <h3>排版选项</h3>
         <div class="card-hint">中文 PDF 的版面</div>
         <div class="toggle-row">
@@ -161,7 +170,7 @@
         </div>
       </div>
 
-      <div class="set-card">
+      <div class="set-card" data-section="output">
         <h3>输出</h3>
         <div class="card-hint">成品 PDF 的字体与归档位置</div>
         <div class="fgrid">
@@ -171,6 +180,7 @@
           </div>
           <label>归档目录</label><input class="in mono" id="cfg-outdir" placeholder="默认 程序目录\Literature Library">
         </div>
+        <div id="font-preview-status" class="card-hint" role="status" aria-live="polite"></div>
         <div class="preview-block" id="font-preview">
           <div class="pv-line">预览：中英文混排 A different language is a different vision of life，公式 <span class="tex" data-tex="f(x)=\sum_{i=1}^{n} w_i x_i+b">f(x)=\sum_{i=1}^{n} w_i x_i+b</span> 与 <span class="tex" data-tex="\frac{\partial u}{\partial t}">\frac{\partial u}{\partial t}</span></div>
           <div class="pv-line b">粗体：中文粗体检验 · <span class="tex" data-tex="A\boldsymbol{x}=\boldsymbol{b},\ \omega=2\pi f">A\boldsymbol{x}=\boldsymbol{b},\ \omega=2\pi f</span></div>
@@ -189,12 +199,7 @@
         <div class="card-hint update-result" id="update-result" hidden></div>
       </div>
 
-      <div class="save-bar">
-        <span class="dirty-pill" id="dirty-pill">● 有未保存的修改</span>
-        <span class="save-note">改动保存后对新任务生效</span>
-        <span class="save-hint" id="save-hint"></span>
-        <button class="btn primary" id="btn-save-config">保存设置</button>
-      </div>
+
     </section>
 
     <!-- ============ 视图：日志 ============ -->
@@ -223,6 +228,7 @@
   </div>
 </div>
 <script defer src="/assets/katex/katex.min.js"></script>
-<script src="/main.js?v=063"></script>
+<script src="/main.js?v=1.2.1"></script>
+<script src="/autosave.js?v=1.2.1"></script>
 </body>
 </html>

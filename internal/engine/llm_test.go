@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -55,7 +56,7 @@ func TestLLMBad200Bodies(t *testing.T) {
 			m := &countingMock{body: func() (int, string) { return 200, c.body }}
 			srv := httptest.NewServer(m.handler())
 			defer srv.Close()
-			_, err := newTestClient(srv.URL, 4).Complete("sys", "user", 0.1, nil)
+			_, err := newTestClient(srv.URL, 4).CompleteContext(context.Background(), "sys", "user", 0.1, nil)
 			if err == nil {
 				t.Fatal("应报错")
 			}
@@ -74,7 +75,7 @@ func TestLLMRetryOn429(t *testing.T) {
 	m := &countingMock{body: func() (int, string) { return http.StatusTooManyRequests, `rate limited` }}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
-	_, err := newTestClient(srv.URL, 2).Complete("sys", "user", 0.1, nil)
+	_, err := newTestClient(srv.URL, 2).CompleteContext(context.Background(), "sys", "user", 0.1, nil)
 	if err == nil {
 		t.Fatal("应报错")
 	}
@@ -91,7 +92,7 @@ func TestLLMRetryOnNetworkError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	url := srv.URL
 	srv.Close() // 端口已关 → 连接拒绝
-	_, err := newTestClient(url, 2).Complete("sys", "user", 0.1, nil)
+	_, err := newTestClient(url, 2).CompleteContext(context.Background(), "sys", "user", 0.1, nil)
 	if err == nil {
 		t.Fatal("应报错")
 	}
@@ -110,7 +111,7 @@ func TestLLMSuccessStripsContent(t *testing.T) {
 	}}
 	srv := httptest.NewServer(m.handler())
 	defer srv.Close()
-	got, err := newTestClient(srv.URL, 1).Complete("sys", "user", 0.1, nil)
+	got, err := newTestClient(srv.URL, 1).CompleteContext(context.Background(), "sys", "user", 0.1, nil)
 	if err != nil || got != "译文内容" {
 		t.Fatalf("got %q, err %v", got, err)
 	}
@@ -134,7 +135,7 @@ func TestLLMResponseBodyReadError(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	_, err := newTestClient(srv.URL, 2).Complete("sys", "user", 0.1, nil)
+	_, err := newTestClient(srv.URL, 2).CompleteContext(context.Background(), "sys", "user", 0.1, nil)
 	if err == nil {
 		t.Fatal("应报错")
 	}

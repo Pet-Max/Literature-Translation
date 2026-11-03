@@ -38,7 +38,7 @@ var benignVocabDiff = map[string]map[string]struct{}{
 func TestVocabParity(t *testing.T) {
 	cases := []struct{ name, pdf, py string }{
 		{"example", "testdata/example.pdf", "testdata/example_py.txt"},
-		{"1510", "testdata/1510.pdf", "testdata/1510_py.txt"},
+		{"1510", "../samples/example-document-en.pdf", "testdata/1510_py.txt"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -55,7 +55,7 @@ func TestVocabParity(t *testing.T) {
 			if strings.ContainsRune(goText, '\ufffe') {
 				t.Fatalf("Go 输出仍含 U+FFFE 标记")
 			}
-			for _, l := range []rune("ﬀﬁﬂﬃﬄﬅﬆ") {
+			for _, l := range "ﬀﬁﬂﬃﬄﬅﬆ" {
 				if strings.ContainsRune(goText, l) {
 					t.Fatalf("Go 输出仍含连字码点 %U", l)
 				}
@@ -107,7 +107,7 @@ As shown in Eq. (7), the β∆ relation holds for $T_1 < T_2$ with work $W$.
 `
 	for _, c := range []struct{ name, pdf, py string }{
 		{"example", "testdata/example.pdf", "testdata/example_py.txt"},
-		{"1510", "testdata/1510.pdf", "testdata/1510_py.txt"},
+		{"1510", "../samples/example-document-en.pdf", "testdata/1510_py.txt"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			pyData, err := os.ReadFile(c.py)

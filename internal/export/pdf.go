@@ -162,7 +162,6 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 		chromedp.Navigate(url),
 		chromedp.Poll(`window.__ktxDone === true`, nil,
 			chromedp.WithPollingTimeout(30*time.Second)),
-		chromedp.Evaluate(`window.__ktxErr || ""`, &ktxErr),
 		// 打印前由 Go 侧再驱动两轮宽公式适配（字体晚到时布局会变，
 		// 页面自身的定时器可能已经停了）；顺带抓取诊断快照
 		chromedp.Sleep(300*time.Millisecond),
@@ -176,10 +175,9 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 			overflow: [...document.querySelectorAll('.ktx-disp')].filter(function (e) { return e.scrollWidth > e.clientWidth + 2; }).length
 		}); })()`, &diag2),
 		chromedp.Sleep(300*time.Millisecond),
-		chromedp.Navigate(url),
-		chromedp.Poll(`window.__ktxDone === true`, nil,
-			chromedp.WithPollingTimeout(30*time.Second)),
-		chromedp.Evaluate(`window.__ktxErr || ""`, &ktxErr),
+		chromedp.Evaluate(`window.__renderStats && Array.isArray(window.__renderStats.errors)
+			? (window.__renderStats.errors.length ? '公式渲染失败（' + window.__renderStats.errors.length + ' 处）' : '')
+			: '缺少公式渲染结果' `, &ktxErr),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			if ktxErr != "" {
 				return fmt.Errorf("KaTeX 渲染报错: %s", ktxErr)

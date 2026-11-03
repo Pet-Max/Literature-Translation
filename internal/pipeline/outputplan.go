@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -15,8 +16,7 @@ const (
 	dirZhPDF   = "04_zh_pdf"
 	dirProcess = "_process"
 
-	archiveFolderMax  = 100 // 档案夹名长度上限（防超长路径）
-	defaultArchiveDir = "Literature Library"
+	archiveFolderMax = 100 // 档案夹名长度上限（防超长路径）
 )
 
 // ArchivePlan 一篇文献的归档路径方案（目录均已创建）。
@@ -130,6 +130,20 @@ func sanitizeName(s string) string {
 
 // copyFile 单文件拷贝（覆盖同名）。
 func copyFile(src, dst string) error {
+	return copyFileContext(context.Background(), src, dst)
+}
+
+func copyFileContext(ctx context.Context, src, dst string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	sourceInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	if targetInfo, e := os.Stat(dst); e == nil && os.SameFile(sourceInfo, targetInfo) {
+		return nil
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -138,41 +152,38 @@ func copyFile(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	out, err := os.Create(dst)
+	out, err := os.CreateTemp(filepath.Dir(dst), ".copy-*")
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	if _, err := io.Copy(out, in); err != nil {
+	tmp := out.Name()
+	defer os.Remove(tmp)
+	if _, err = io.Copy(out, contextReader{ctx, in}); err != nil {
+		out.Close()
 		return err
 	}
-	return nil
+	if err = out.Sync(); err != nil {
+		out.Close()
+		return err
+	}
+	if err = out.Close(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
 }
 
-// copyDir 递归拷贝目录（覆盖同名文件）。src 不存在时静默返回。
-func copyDir(src, dst string) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+// contextReader prevents a large local copy from continuing after cancellation.
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s 不是目录", src)
-	}
-	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		return copyFile(path, target)
-	})
+	return r.reader.Read(p)
 }

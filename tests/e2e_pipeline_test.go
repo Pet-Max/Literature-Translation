@@ -1,7 +1,7 @@
 // e2e_pipeline_test.go — 管线集成测试（第三层测试体系）。
 //
 // 用 Go 内嵌 httptest 起 mock LLM（OpenAI 兼容 /chat/completions），
-// 驱动内置 Go 引擎（v1.2.0 进程内直调）+ Go 排版 + Edge 打印，
+// 驱动内置 Go 引擎 + Go 排版 + Edge 打印，
 // 跑通 TranslateMD 全流程，断言归档体系四类产物落盘。
 // 不需要真 LLM、不烧 MinerU 配额。
 // 两个用例：全链路归档（TestE2ETranslateMDArchive）、断点续跑（TestE2ECheckpointResume）。
@@ -91,7 +91,7 @@ func TestE2ETranslateMDArchive(t *testing.T) {
 	// ---- 样本文献 + 旁侧图片 ----
 	srcDir := t.TempDir()
 	mdPath := filepath.Join(srcDir, "sample_paper.md")
-	if err := os.WriteFile(mdPath, []byte(sampleEN), 0o644); err != nil {
+	if err := os.WriteFile(mdPath, []byte(strings.ReplaceAll(sampleEN, "The method section references the main result ⟦F1⟧ and the auxiliary plot ⟦F2⟧.", "The method section references the main result ![plot](images/fig1.svg).")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(srcDir, "images"), 0o755); err != nil {
@@ -228,6 +228,21 @@ func TestE2ETranslateMDArchive(t *testing.T) {
 	}
 	if plan2.Dir != plan.Dir {
 		t.Errorf("同源重跑应复用档案夹：首次=%s 二次=%s", plan.Dir, plan2.Dir)
+	}
+	// 排版设置变化可复用完成的译文；真实重导出保留统计且不再请求 LLM。
+	pl.Cfg.Export.TOC = !pl.Cfg.Export.TOC
+	resumed, ok, err := pl.ResumeExport(ctx, plan2)
+	if err != nil || !ok {
+		t.Fatalf("完成的译文不能重导出: ok=%v err=%v", ok, err)
+	}
+	if resumed.Total != res.Total || resumed.Done != res.Done || resumed.KeptReferences != res.KeptReferences {
+		t.Fatal("重导出丢失任务统计")
+	}
+	mu.Lock()
+	afterResume := llmCalls
+	mu.Unlock()
+	if afterResume != calls {
+		t.Fatal("仅重导出仍调用 LLM")
 	}
 }
 
@@ -375,8 +390,32 @@ func TestE2ECheckpointResume(t *testing.T) {
 		t.Errorf("失败段应保留英文原文（ZZFAILZZ）")
 	}
 
-	// ---- 第二轮：修好 mock。前两段命中断点，只有失败段重新请求
+	// Simulate an existing Schema 1 archive. Its valid segment cache remains usable.
+	metaPath := filepath.Join(plan.ProcessDir, "run.json")
+	metaBytes, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(metaBytes, &meta); err != nil {
+		t.Fatal(err)
+	}
+	meta["schema"] = 1
+	metaBytes, err = json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metaPath, metaBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, attempted, e := pl.ResumeExport(ctx, plan); attempted || e != nil {
+		t.Fatal("Schema 1 directly re-exported", e)
+	}
+
+	// ---- 第二轮：修好 mock。已完成的两段命中断点，只有失败段重新请求
+	mock.mu.Lock()
 	mock.failSub = ""
+	mock.mu.Unlock()
 	mock.reset()
 	res2, err := pl.TranslateMD(ctx, mdPath, "", plan)
 	if err != nil {
@@ -404,10 +443,27 @@ func TestE2ECheckpointResume(t *testing.T) {
 	if !strings.Contains(string(data), `"meta"`) || strings.Count(string(data), `"zh"`) != 3 {
 		t.Errorf("断点文件内容异常（应有 meta 行 + 3 条 zh 记录）：\n%s", data)
 	}
+	metaBytes, err = os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(metaBytes, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta["schema"] != float64(2) || meta["complete"] != true {
+		t.Fatal("legacy run was not upgraded to completed Schema 2")
+	}
+	mock.reset()
+	if _, err := pl.TranslateMD(ctx, mdPath, "", plan); err != nil {
+		t.Fatal(err)
+	}
+	if mock.count() != 0 {
+		t.Fatal("Schema 2 valid segments were requested again")
+	}
 }
 
 // TestE2ECancelledTranslate 取消语义：ctx 已取消 → TranslateMD 立即返回
-// 「翻译已取消」，不空等引擎（v1.1.1 sup.Call 的取消 parity）。
+// 「翻译已取消」，不空等引擎（不等待引擎请求完成）。
 func TestE2ECancelledTranslate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("集成测试，-short 跳过")

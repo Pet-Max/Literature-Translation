@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -56,7 +57,7 @@ func TestTranslateBilingual(t *testing.T) {
 
 	md := "# 标题A\n\n第一段内容。\n\n# 标题B\n\n[1] Ref Author, Title, J. Phys. 1, 1 (2019).\n"
 	out := filepath.Join(t.TempDir(), "bi_zh.md")
-	res, err := Translate(TranslateOptions{
+	res, err := TranslateContext(context.Background(), TranslateOptions{
 		MDText: md, OutPath: out, Bilingual: true, SkipReferences: true,
 		LLM: LLMOptions{BaseURL: srv.URL, APIKey: "k", Model: "m", Concurrency: 2},
 	})
@@ -134,7 +135,7 @@ func TestTranslateSweepRescue(t *testing.T) {
 	md := "# Rescue\n\nThis section contains RESCUEPOINT and should be rescued.\n\n# Normal\n\nThis section translates fine.\n"
 	var events []Event
 	out := filepath.Join(t.TempDir(), "rescue_zh.md")
-	res, err := Translate(TranslateOptions{
+	res, err := TranslateContext(context.Background(), TranslateOptions{
 		MDText: md, OutPath: out, SkipReferences: true,
 		LLM:     LLMOptions{BaseURL: srv.URL, APIKey: "k", Model: "m", Concurrency: 2},
 		OnEvent: func(ev Event) { events = append(events, ev) },

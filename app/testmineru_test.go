@@ -30,8 +30,10 @@ func TestParseConnTestCode(t *testing.T) {
 		{"数组成功不误报异常", `[200]`, false, true},
 		{"混合数组无效优先", `[401,200]`, true, true}, // 双旗标并存：调用方 switch 先查 bad → 判无效
 		{"数组垃圾元素", `["x"]`, false, false},
-		{"null视为有效", `null`, false, true},
-		{"缺失视为有效", ``, false, true},
+		{"数组null不确认有效", `[null]`, false, false},
+		{"数组混有未知码不确认有效", `[200,123]`, false, false},
+		{"null不确认有效", `null`, false, false},
+		{"缺失不确认有效", ``, false, false},
 		{"垃圾文本", `"abc"`, false, false},
 		{"垃圾文本含401子串不误判", `"140189"`, false, false},
 	}

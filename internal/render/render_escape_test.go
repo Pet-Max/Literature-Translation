@@ -1,5 +1,5 @@
 // render_escape_test.go — \$ 转义哨兵：冻结区内的 \$ 必须还原为字面 $，
-// 不得以 NUL+"ESC"+NUL 形态残留在导出 HTML（v1.1.1 遗留缺陷的回归锁）。
+// 不得以 NUL+"ESC"+NUL 形态残留在导出 HTML（历史转义缺陷的回归锁）。
 package render
 
 import (

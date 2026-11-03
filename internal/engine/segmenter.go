@@ -1,6 +1,6 @@
 // segmenter.go — 把 Markdown 按标题层级切成适合喂给 LLM 的段。
 //
-// 自 v1.1.1 引擎母本移植（117 行）。规则：
+// 切段规则：
 //  1. 遇到标题行（# ~ ######）且当前段非空 → 开新段（标题随新段走）；
 //  2. 段内按空行分节累加，超过 max_chars 上限 → 收束当前段；
 //  3. 单个段落本身超上限（罕见，如超长表格冻结后仍超）→ 在上限附近
@@ -9,8 +9,8 @@
 // 切段保持原文逐字拼接（"\n\n" 连接），保证回填组装后与原文只差段与段
 // 之间的分隔符——不对内容做任何改写。
 //
-// 移植注意：Python 的 len()/切片按"字符"计，这里一律用 rune 计数与切片
-// （[]rune），保证与母本在含希腊字母/重音符/中日韩字符的文本上结果一致。
+// 字符长度与切片一律按 rune 计数，保持段落边界和字符坐标一致
+// （[]rune），保证与既有字符计数约定在含希腊字母/重音符/中日韩字符的文本上结果一致。
 package engine
 
 import (
@@ -20,20 +20,20 @@ import (
 	"unicode/utf8"
 )
 
-// headingRe 标题行（# ~ ######）。Python 母本带 (?m)；对单行匹配时
+// headingRe 标题行（# ~ ######）。标题模式带 (?m)；对单行匹配时
 // ^ 即行首，语义一致；validator 在整篇文本上使用时 (?m) 必需。
 var headingRe = regexp.MustCompile(`(?m)^#{1,6}\s`)
 
 // refHeadRe 文献条目段首（[N] 开头）。
 var refHeadRe = regexp.MustCompile(`^\[\d{1,3}\]\s`)
 
-// blockSplitRe 空行分块（Python re.split(r"\n\s*\n", ...)）。
+// blockSplitRe 空行分块。
 var blockSplitRe = regexp.MustCompile(`\n\s*\n`)
 
 // DefaultMaxChars 默认切段上限（字符数，rune 口径）。
 const DefaultMaxChars = 3000
 
-// runeLen 字符数（对齐 Python len()）。
+// runeLen 字符数。
 func runeLen(s string) int { return utf8.RuneCountInString(s) }
 
 // Split 返回切段列表；空文本返回 []。

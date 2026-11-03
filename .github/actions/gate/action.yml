@@ -30,7 +30,8 @@ runs:
     - name: frontend E2E
       shell: pwsh
       run: |
-        npm i --no-save playwright-core
+        npm ci
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         node tests/e2e_frontend.mjs
       env:
         CHROME_PATH: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"

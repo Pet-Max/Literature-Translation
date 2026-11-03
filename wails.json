@@ -8,5 +8,11 @@
   "frontend:dev:serverUrl": "auto",
   "author": {
     "name": "Pet-Max"
+  },
+  "info": {
+    "productName": "Literature Translation",
+    "productVersion": "1.2.1",
+    "companyName": "Pet-Max",
+    "copyright": "Copyright © 2026 Pet-Max"
   }
 }

@@ -254,7 +254,7 @@ body{
 .btn.ghost-sm:hover{background:var(--hover-1);color:var(--ink)}
 .btn.danger:hover{color:var(--bad);border-color:var(--bad)}
 
-/* ================= 设置页（分组卡片 + 常驻保存栏） ================= */
+/* ================= 设置页（分组卡片 + 自动保存状态） ================= */
 .set-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 22px;margin-bottom:16px;
   transition:border-color .2s ease}
 .set-card:hover{border-color:var(--line-strong)}
@@ -288,6 +288,8 @@ select.in option{background:var(--panel);color:var(--ink)}
 .conn-dot.spin{color:var(--accent);animation:connSpin .8s linear infinite}
 @keyframes connSpin{to{transform:translateY(-50%) rotate(360deg)}}
 .conn-dot.ok{color:var(--ok);font-weight:700}
+.conn-dot.info{color:var(--accent);font-weight:700}
+.conn-dot.warning{color:var(--warn);font-weight:700}
 .conn-dot.bad{color:var(--bad);font-weight:700}
 .toggle-row{display:flex;align-items:center;gap:10px;margin-bottom:13px}
 .switch{position:relative;width:36px;height:20px;flex:none}
@@ -308,41 +310,26 @@ select.in option{background:var(--panel);color:var(--ink)}
 .pv-line{font-size:14px;line-height:2}
 .preview-block .katex{font-size:1.05em}
 .pv-line.b{font-weight:700}
-.save-bar{
-  position:sticky;z-index:6;display:flex;align-items:center;gap:12px;
-  background:var(--glass-bar);backdrop-filter:blur(22px) saturate(160%);
-  border-top:1px solid var(--line);padding:11px 26px;margin:10px -30px -34px;bottom:-34px;
-}
-.dirty-pill{
-  display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--warn);
-  background:var(--warn-tint);border-radius:999px;padding:3px 12px;
-  opacity:0;transform:scale(.9);pointer-events:none;
-  transition:opacity .25s ease,transform .3s var(--spring);
-}
-.dirty-pill.show{opacity:1;transform:scale(1)}
-.save-note{color:var(--ink-3);font-size:11px;margin-left:auto}
-.save-hint{font-size:12px;color:var(--ok)}
-.save-bar .btn.primary{flex:none}
-
 /* 拉取模型弹出列表 */
 .model-pop{
   position:absolute;top:calc(100% + 6px);left:0;z-index:30;min-width:300px;max-width:460px;
-  max-height:264px;overflow-y:auto;scrollbar-gutter:stable;
+  max-height:264px;overflow:hidden;
   background:var(--panel);border:1px solid var(--line-strong);border-radius:12px;
-  box-shadow:var(--shadow-glow);padding:6px;
+  box-shadow:var(--shadow-glow);
   animation:popIn .22s var(--spring);
 }
+.model-pop:not([hidden]){display:flex;flex-direction:column}
+.mp-list{min-height:0;overflow-y:auto;scrollbar-gutter:stable;padding:6px}
 @keyframes popIn{from{opacity:0;transform:translateY(-6px) scale(.97)}}
 /* 弹层专用滚动条：轨道可见，多模型时可明确滚动 */
-.model-pop::-webkit-scrollbar{width:10px}
-.model-pop::-webkit-scrollbar-track{background:var(--surface-3);border-radius:99px;margin:6px 0}
-.model-pop::-webkit-scrollbar-thumb{background:var(--ink-3);border-radius:99px;border:2px solid var(--surface-3)}
-.model-pop::-webkit-scrollbar-thumb:hover{background:var(--accent)}
+.mp-list::-webkit-scrollbar{width:10px}
+.mp-list::-webkit-scrollbar-track{background:var(--surface-3);border-radius:99px;margin:6px 0}
+.mp-list::-webkit-scrollbar-thumb{background:var(--ink-3);border-radius:99px;border:2px solid var(--surface-3)}
+.mp-list::-webkit-scrollbar-thumb:hover{background:var(--accent)}
 .mp-head{
-  display:flex;align-items:center;justify-content:space-between;
-  font-size:11px;color:var(--ink-3);padding:6px 12px 7px;
-  border-bottom:1px solid var(--line);margin-bottom:5px;
-  position:sticky;top:0;background:var(--panel);border-radius:12px 12px 0 0;
+  display:flex;align-items:center;justify-content:space-between;flex:none;
+  font-size:11px;color:var(--ink-3);padding:12px 18px 11px;
+  border-bottom:1px solid var(--line);background:var(--panel);
 }
 .mp-close{border:none;background:none;color:var(--ink-3);cursor:pointer;font-size:12px;padding:2px 5px;border-radius:6px}
 .mp-close:hover{color:var(--bad);background:var(--bad-tint)}
@@ -521,3 +508,17 @@ select.in option{background:var(--panel);color:var(--ink)}
 @media (prefers-reduced-motion:reduce){.update-result:not([hidden]){animation:none}}
 .update-result{margin-top:10px}
 .update-result b{color:var(--ok)}
+
+/* Settings persistence uses the existing card and theme tokens. */
+.set-card h3{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.autosave-state{font-size:12px;font-weight:400;color:var(--ink-3);display:inline-flex;align-items:center;gap:8px}
+.autosave-state.saved,.autosave-state.fading{color:var(--ok)}
+.autosave-state.fading{opacity:0;transition:opacity .5s ease-out}
+@media (prefers-reduced-motion:reduce){.autosave-state.fading{opacity:1;transition:none}}
+.autosave-state.error{color:var(--bad)}
+.autosave-state.saving{color:var(--accent)}
+.settings-undo{font-size:13px;margin-top:8px}
+.r-draft{font-size:11px;color:var(--accent);margin-left:8px}
+.conn-message{font-size:12px;margin:5px 0 0;color:var(--ink-3);overflow-wrap:anywhere}
+
+.inline-btns:has(#cfg-font){flex-wrap:wrap}

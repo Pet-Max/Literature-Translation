@@ -5,6 +5,7 @@
 internal/pipeline/testdata/** -text
 *.png binary
 *.ico binary
+*.syso binary
 *.woff binary
 *.woff2 binary
 *.ttf binary

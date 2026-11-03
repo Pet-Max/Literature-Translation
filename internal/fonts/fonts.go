@@ -140,7 +140,7 @@ func Validate(path string) (Info, error) {
 }
 
 // Import 三连检通过后把字体复制进字体库，返回注册所需信息。
-// fileName 由调用方决定（通常 UserFont-N.ttf/otf），避免并发冲突。
+// 内部名由调用方决定，物理文件名带唯一后缀，避免并发导入和清理互相影响。
 func Import(path, destFileName string) (Info, error) {
 	info, err := Validate(path)
 	if err != nil {
@@ -162,12 +162,25 @@ func Import(path, destFileName string) (Info, error) {
 			ext = ".ttf"
 		}
 	}
-	dest := filepath.Join(dir, destFileName+ext)
-	data, err := os.ReadFile(path)
+	if destFileName != filepath.Base(destFileName) || !internalNameRe.MatchString(destFileName) {
+		return info, fmt.Errorf("非法字体内部名")
+	}
+	f, err := os.CreateTemp(dir, destFileName+"-*"+ext)
 	if err != nil {
 		return info, err
 	}
+	dest := f.Name()
+	if err = f.Close(); err != nil {
+		_ = os.Remove(dest)
+		return info, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		_ = os.Remove(dest)
+		return info, err
+	}
 	if err := os.WriteFile(dest, data, 0o644); err != nil {
+		_ = os.Remove(dest)
 		return info, fmt.Errorf("写入字体库失败: %w", err)
 	}
 	info.FileName = filepath.Base(dest)

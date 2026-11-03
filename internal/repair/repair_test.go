@@ -305,7 +305,7 @@ func TestMergeDoubleF(t *testing.T) {
 
 func TestUnfreezeNestedPlaceholder(t *testing.T) {
 	// 代码围栏嵌在 $$…$$ 内：冻结嵌套，恢复必须按外层→内层完成，
-	// 不得把 \x00N\x00 以字面量留在正文（V4 全库 862 处泄漏的根因）
+	// 不得把 \x00N\x00 以字面量留在正文（历史全库验证中 862 处泄漏的根因）
 	orig := "some prose text for the vocabulary here different"
 	md := "$$\n```\nfenced $$ content\n```\n$$\n\nthe diferent text"
 	vocab := BuildVocab(orig)

@@ -22,25 +22,28 @@ const (
 
 // Task 队列中的一个翻译任务。
 type Task struct {
-	ID         string     `json:"id"`
-	Code       string     `json:"code"`
-	Kind       string     `json:"kind"` // pdf | md | export（仅排版）
-	Mode       string     `json:"mode"` // 入队时的模式档位：auto | translate | export
-	SourcePath string     `json:"source_path"`
-	Status     TaskStatus `json:"status"`
-	Stage      string     `json:"stage"`
-	Done       int        `json:"done"`
-	Total      int        `json:"total"`
-	Failed     int        `json:"failed"`
-	DoneIdx    []int      `json:"done_idx"`   // 已完成段的 0 基编号（前端逐段着色）
-	FailedIdx  []int      `json:"failed_idx"` // 失败段的 0 基编号
-	Sweeping   bool       `json:"sweeping"`   // 正处收尾补翻阶段
-	RefsKept   int        `json:"refs_kept"`
-	OutPDF     string     `json:"out_pdf"`
-	ZHMD       string     `json:"zh_md"`
-	WorkDir    string     `json:"work_dir"`
-	Err        string     `json:"err"`
-	AddedAt    time.Time  `json:"added_at"`
+	ID   string `json:"id"`
+	Code string `json:"code"`
+	Kind string `json:"kind"` // pdf | md | export（仅排版）
+	Mode string `json:"mode"` // 入队时的模式档位：auto | translate | export
+	// 上次失败于「排版中」的任务重试时置位：译文已归档且配置未变则跳过
+	// 解析与翻译仅重导出（不烧 MinerU / LLM 配额）。内部瞬态标记，不下发前端。
+	ResumeExport bool       `json:"-"`
+	SourcePath   string     `json:"source_path"`
+	Status       TaskStatus `json:"status"`
+	Stage        string     `json:"stage"`
+	Done         int        `json:"done"`
+	Total        int        `json:"total"`
+	Failed       int        `json:"failed"`
+	DoneIdx      []int      `json:"done_idx"`   // 已完成段的 0 基编号（前端逐段着色）
+	FailedIdx    []int      `json:"failed_idx"` // 失败段的 0 基编号
+	Sweeping     bool       `json:"sweeping"`   // 正处收尾补翻阶段
+	RefsKept     int        `json:"refs_kept"`
+	OutPDF       string     `json:"out_pdf"`
+	ZHMD         string     `json:"zh_md"`
+	WorkDir      string     `json:"work_dir"`
+	Err          string     `json:"err"`
+	AddedAt      time.Time  `json:"added_at"`
 }
 
 var codeRe = regexp.MustCompile(`^[A-Za-z]+\d+`)
@@ -130,8 +133,9 @@ func (q *TaskQueue) Add(kind, path, mode string) (Task, error) {
 	q.mu.Lock()
 	for _, t := range q.tasks {
 		if t.SourcePath == path && (t.Status == StatusPending || t == q.current) {
+			snapshot := *t
 			q.mu.Unlock()
-			return *t, nil
+			return snapshot, nil
 		}
 	}
 	code := codeRe.FindString(baseName(path))
@@ -149,9 +153,10 @@ func (q *TaskQueue) Add(kind, path, mode string) (Task, error) {
 		AddedAt:    time.Now(),
 	}
 	q.tasks = append(q.tasks, t)
+	snapshot := *t
 	q.mu.Unlock()
 	q.wake()
-	return *t, nil
+	return snapshot, nil
 }
 
 // List 全部任务快照（值拷贝）。返回快照而非指针：前端绑定 goroutine
@@ -239,6 +244,9 @@ func (q *TaskQueue) Retry(id string) (Task, error) {
 		q.mu.Unlock()
 		return Task{}, fmt.Errorf("任务正在处理，跑完后再重跑")
 	}
+	// 先捕获上次失败阶段再重置：失败于「排版中」的重试走「仅重导出」
+	// 短路（守卫在 pipeline.ResumeExport：译文归档齐全且配置未变才跳过）
+	t.ResumeExport = t.Stage == string(StatusRendering)
 	t.Status = StatusPending
 	t.Stage = "重新排队"
 	t.Err = ""
@@ -247,9 +255,10 @@ func (q *TaskQueue) Retry(id string) (Task, error) {
 	// 上次产物一并清空：重排队的卡片不该显示旧成品路径
 	t.OutPDF, t.ZHMD, t.WorkDir = "", "", ""
 	t.DoneIdx, t.FailedIdx, t.Sweeping = nil, nil, false
+	snapshot := *t
 	q.mu.Unlock()
 	q.wake()
-	return *t, nil
+	return snapshot, nil
 }
 
 func baseName(path string) string {
@@ -267,9 +276,12 @@ func (q *TaskQueue) wake() {
 	}
 }
 
-func (q *TaskQueue) nextPending() *Task {
+func (q *TaskQueue) claimPending() *Task {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.paused || q.current != nil {
+		return nil
+	}
 	for _, t := range q.tasks {
 		if t.Status != StatusPending {
 			continue
@@ -277,6 +289,7 @@ func (q *TaskQueue) nextPending() *Task {
 		if q.soloID != "" && t.ID != q.soloID {
 			continue // 单跑模式：其余任务跳过
 		}
+		q.current = t
 		return t
 	}
 	return nil
@@ -291,16 +304,15 @@ func (q *TaskQueue) Worker(ctx interface{ Done() <-chan struct{} }) {
 			return
 		case <-q.notify:
 			for {
-				if q.IsPaused() {
-					break
+				select {
+				case <-ctx.Done():
+					return
+				default:
 				}
-				t := q.nextPending()
+				t := q.claimPending()
 				if t == nil {
 					break
 				}
-				q.mu.Lock()
-				q.current = t
-				q.mu.Unlock()
 				if err := q.runner(t); err != nil {
 					q.mu.Lock()
 					t.Status = StatusFailed

@@ -44,6 +44,8 @@ type Stats struct {
 	Accents int      // 分离重音符合成（H¨anggi→Hänggi）
 	Ctrl    int      // 控制码还原为希腊字母等（PDF 文本层锚定）
 	Display int      // 伪行间公式 $…$ 升级为 $$…$$
+	SupSub  int      // 散文级 HTML 上下标解包（MinerU 误包整句为下标）
+	MathFix int      // 数学区伪影归一（间距宏/排版引号/引用撕裂/伪上标/冗余残片）
 	Kept    []string // 存疑未动的词（去重，供日志）
 	Details []string // 逐条修改记录（供 calibrate 命令人工抽查，封顶 maxDetails）
 }
@@ -112,19 +114,26 @@ func Calibrate(md, origText string, opt Options) (Result, error) {
 	vocab := BuildVocab(orig)
 	var st Stats
 	// 0) 结构性还原：HTML 表格 → Markdown 表格；残余 <eq> → $…$；
-	//    分离重音符合成
+	//    分离重音符合成；散文级上下标解包
 	text := tablesToMarkdown(md, &st)
 	text = eqToMath(text, &st)
 	text = composeAccents(text, &st)
+	text = unwrapProseSupSub(text, &st)
 	// 1) 符号修复（行内公式内容在此阶段单独处理）
 	if opt.Symbols {
 		text = fixControlChars(text, orig, &st)
 		text = normalizeSymbols(text, orig, &st)
 	}
+	// 数学伪影修复也遵循符号开关；引号仅由上方带原文锚点的规则处理。
+	if opt.Symbols {
+		text = fixMathArtifacts(text, &st)
+	}
 	// 1.5) 伪行间公式升级：必须在符号修复之后——升级成的 $$ 块会被
 	//      词级冻结且符号规则只处理行内 $…$，先升级会让独立成行的
 	//      $…$ 里的 |00i/⟩⟨ 损伤逃过修复（探针实证的顺序缺口）
-	text = promoteDisplayMath(text, &st)
+	if opt.Symbols {
+		text = promoteDisplayMath(text, &st)
+	}
 	// 2) 词级校准（公式/代码/标签冻结）：先上下文锚定（精确，可处理真词
 	//    损伤），后通用拼写规则（兜住剩余非常规词损伤）
 	if !opt.Spelling {
@@ -177,9 +186,8 @@ func freeze(md string, freezeInline bool) (string, map[string]string) {
 	return text, protect
 }
 
-// unfreeze 按键号从大到小恢复（后冻结的是外层）。map 随机序会把内层
-// 占位符以字面量形式残留在正文里——V4 全库验证中 862 处正文变成
-// \x00N\x00 乱码即此因；降序恢复时外层先还原，内层键随后必然被处理。
+// unfreeze 按键号从大到小恢复（后冻结的是外层），保证外层先还原，
+// 内层键随后处理，避免 map 的随机遍历顺序残留占位符。
 func unfreeze(text string, protect map[string]string) string {
 	keys := make([]string, 0, len(protect))
 	for k := range protect {

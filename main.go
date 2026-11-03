@@ -5,7 +5,6 @@ import (
 
 	"literature-translation/app"
 	"literature-translation/internal/config"
-	"literature-translation/internal/render"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -28,7 +27,7 @@ func main() {
 		DisableResize: false,
 		AssetServer: &assetserver.Options{
 			Assets:  assets,
-			Handler: render.AssetHandler(), // 预览与导出同源（katex/lxgw 字体）
+			Handler: app.AssetHandler(a), // 预览与导出同源（katex/lxgw 字体）
 		},
 		DragAndDrop: &options.DragAndDrop{
 			EnableFileDrop:     true,

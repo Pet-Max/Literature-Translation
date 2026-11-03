@@ -1,6 +1,6 @@
 // checkpoints.go — 断点续跑：每段译文即时落盘 JSONL。
 //
-// 自 v1.1.1 引擎母本移植（100 行）。文件格式（每行一个 JSON 对象）：
+// 断点文件格式（每行一个 JSON 对象）：
 //
 //	{"meta": {"key": "任务指纹"}}                        首行：规则/术语/模型指纹
 //	{"i": 3, "h": "源段内容哈希", "zh": "……译文……"}   该段完成
@@ -12,8 +12,8 @@
 //
 // 兼容性与逐字节约定：
 //   - chunk_hash 输入串与输出（sha1 hex 前 12 位）与 v1.1.x 完全一致；
-//   - 写出行与 Python json.dumps(..., ensure_ascii=False) 逐字节一致
-//     （", "/": " 分隔符、键序、不转义 HTML 字符）；
+//   - 写出行与 v1.1.x 断点文件逐字节一致（", "/": " 分隔符、键序、
+//     不转义 HTML 字符），旧进度因此可继续复用；
 //   - v1.1.x 在 Windows 上以文本模式写 \r\n，读取端两种行尾都认；
 //     Go 端写入统一 \n。
 package engine
@@ -36,10 +36,10 @@ func ChunkHash(text string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
-// pyJSONString 按 Python json.dumps(s, ensure_ascii=False) 的转义规则编码
-// 单个字符串（不转义 <>&；已知差异：Go 无条件转义 U+2028/U+2029，且
-// \b/\f 用 \uXXXX 形式——学术 MD 文本中不会出现）。
-func pyJSONString(s string) string {
+// jsonString 按 v1.1.x 断点文件的转义约定编码单个字符串（不转义 <>&；
+// 已知差异：Go 无条件转义 U+2028/U+2029，且 \b/\f 用 \uXXXX 形式——
+// 学术 MD 文本中不会出现）。
+func jsonString(s string) string {
 	var b bytes.Buffer
 	enc := json.NewEncoder(&b)
 	enc.SetEscapeHTML(false)
@@ -61,8 +61,8 @@ type Progress struct {
 	failed      map[int]string
 }
 
-// NewProgress 加载断点文件。cacheKey 为空串等价于 Python 的 None
-// （不写 meta 行、不做指纹校验）。文件不存在返回空进度。
+// NewProgress 加载断点文件。cacheKey 为空串表示不写 meta 行、不做指纹
+// 校验。文件不存在返回空进度。
 func NewProgress(path, cacheKey string) (*Progress, error) {
 	p := &Progress{
 		path:     path,
@@ -82,8 +82,7 @@ func NewProgress(path, cacheKey string) (*Progress, error) {
 	return p, nil
 }
 
-// load 解析 JSONL（容忍坏行）。对齐 Python _load 的分支顺序：
-// meta → zh → failed。
+// load 解析 JSONL（容忍坏行）。识别顺序：meta → zh → failed。
 func (p *Progress) load(data []byte) {
 	stale := false
 	sc := bufio.NewScanner(bytes.NewReader(data))
@@ -171,7 +170,7 @@ func (p *Progress) Reusable(i int, chunk string) bool {
 	return rec.h == ChunkHash(chunk)
 }
 
-// Done 返回某段已记录的译文（M4 主循环 resume 用）。
+// Done 返回某段已记录的译文（主循环恢复用）。
 func (p *Progress) Done(i int) (string, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -186,7 +185,7 @@ func (p *Progress) Record(i int, chunk, zh string) {
 	defer p.mu.Unlock()
 	p.done[i] = doneRec{h: h, zh: zh}
 	delete(p.failed, i)
-	p.append(fmt.Sprintf(`{"i": %d, "h": %s, "zh": %s}`, i, pyJSONString(h), pyJSONString(zh)))
+	p.append(fmt.Sprintf(`{"i": %d, "h": %s, "zh": %s}`, i, jsonString(h), jsonString(zh)))
 }
 
 // RecordFailed 记录该段最终失败并落盘。
@@ -194,7 +193,7 @@ func (p *Progress) RecordFailed(i int, reason string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.failed[i] = reason
-	p.append(fmt.Sprintf(`{"i": %d, "failed": %s}`, i, pyJSONString(reason)))
+	p.append(fmt.Sprintf(`{"i": %d, "failed": %s}`, i, jsonString(reason)))
 }
 
 // append 追加一行（必要时先补 meta 首行）。磁盘满/文件被锁：断点丢失
@@ -208,7 +207,7 @@ func (p *Progress) append(line string) {
 	}
 	defer f.Close()
 	if p.hasKey && !p.metaStamped {
-		if _, err := f.WriteString(`{"meta": {"key": ` + pyJSONString(p.cacheKey) + "}}\n"); err != nil {
+		if _, err := f.WriteString(`{"meta": {"key": ` + jsonString(p.cacheKey) + "}}\n"); err != nil {
 			fmt.Fprintf(os.Stderr, "[checkpoints] 断点写入失败（本次不落盘）：%v\n", err)
 			return
 		}

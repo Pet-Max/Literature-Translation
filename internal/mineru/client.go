@@ -32,16 +32,12 @@ const (
 
 // Result 是一次解析的产物。
 type Result struct {
-	// Dir 解压后的工作目录（内含 full.md 与 images/）
-	Dir string
 	// MDPath Markdown 文件绝对路径
 	MDPath string
-	// Pages 解析页数（尽力而为，取不到为 0）
-	Pages int
 }
 
 type apiResp struct {
-	Code    int    `json:"code"`
+	Code    *int   `json:"code"`
 	MsgCode string `json:"msgCode"`
 	Msg     string `json:"msg"`
 	Data    struct {
@@ -69,7 +65,10 @@ func friendlyCode(r apiResp) error {
 	if r.Success != nil && !*r.Success {
 		return fmt.Errorf("MinerU 接口错误 %s: %s", r.MsgCode, r.Msg)
 	}
-	switch r.Code {
+	if r.Code == nil {
+		return &APIError{Message: "MinerU 返回了无法识别的状态（缺少 code）"}
+	}
+	switch *r.Code {
 	case 0:
 		return nil
 	case -60018:
@@ -77,7 +76,7 @@ func friendlyCode(r apiResp) error {
 	case -60019:
 		return errors.New("MinerU HTML 解析额度不足")
 	default:
-		return fmt.Errorf("MinerU 接口错误 code=%d msg=%s", r.Code, r.Msg)
+		return fmt.Errorf("MinerU 接口错误 code=%d msg=%s", *r.Code, "请检查服务任务状态")
 	}
 }
 
@@ -86,6 +85,13 @@ func friendlyCode(r apiResp) error {
 // onState 回调用于向 UI 报进度（state: pending/running/done…）。
 func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 	onState func(state string)) (*Result, error) {
+	return parsePDF(ctx, token, pdfPath, modelVersion, workDir, onState, baseURL, pollEvery, pollTimeout)
+}
+
+func parsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string, onState func(string), apiBase string, interval, timeout time.Duration) (*Result, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if token == "" {
 		return nil, errors.New("MinerU Token 未配置")
 	}
@@ -114,7 +120,7 @@ func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 	// 会让任务永久卡死——外层 ctx 无 deadline，轮询的 20 分钟上限只在
 	// 两次请求之间检查，救不了挂在单次请求里的情况。
 	applyCtx, cancelApply := context.WithTimeout(ctx, 30*time.Second)
-	rawApply, err := postJSON(applyCtx, token, baseURL+"/file-urls/batch", applyBody, &apply)
+	_, err = postJSON(applyCtx, token, apiBase+"/file-urls/batch", applyBody, &apply)
 	cancelApply()
 	if err != nil {
 		return nil, err
@@ -122,8 +128,8 @@ func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 	if err := friendlyCode(apply); err != nil {
 		return nil, err
 	}
-	if len(apply.Data.FileURLs) == 0 {
-		return nil, fmt.Errorf("MinerU 未返回上传链接，原始响应：%s", rawApply)
+	if len(apply.Data.FileURLs) == 0 || apply.Data.BatchID == "" {
+		return nil, fmt.Errorf("MinerU 未返回有效的批次编号和上传链接")
 	}
 
 	// 2. PUT 上传（预签名 URL：不要设置 Content-Type 等额外头，
@@ -148,7 +154,8 @@ func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 	resp.Body.Close()
 
 	// 3. 轮询批次结果
-	deadline := time.Now().Add(pollTimeout)
+	deadline := time.Now().Add(timeout)
+	consecutiveFailures := 0
 	var zipURL string
 	for {
 		if ctx.Err() != nil {
@@ -158,16 +165,29 @@ func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 			return nil, errors.New("MinerU 解析超时（20 分钟），可稍后重试")
 		}
 		var pr apiResp
-		url := baseURL + "/extract-results/batch/" + apply.Data.BatchID
+		url := apiBase + "/extract-results/batch/" + apply.Data.BatchID
 		pollCtx, cancelPoll := context.WithTimeout(ctx, 30*time.Second)
 		err := getJSON(pollCtx, token, url, &pr)
 		cancelPoll()
 		if err != nil {
-			time.Sleep(pollEvery) // 瞬时网络问题：跳过本次，继续轮询
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			consecutiveFailures++
+			if !retryable(err) || consecutiveFailures >= 5 {
+				return nil, err
+			}
+			if err = wait(ctx, interval); err != nil {
+				return nil, err
+			}
 			continue
 		}
+		consecutiveFailures = 0
 		if err := friendlyCode(pr); err != nil {
 			return nil, err
+		}
+		if len(pr.Data.ExtractResult) == 0 {
+			return nil, &APIError{Message: "MinerU 批次响应缺少任务结果"}
 		}
 		if len(pr.Data.ExtractResult) > 0 {
 			r := pr.Data.ExtractResult[0]
@@ -177,25 +197,76 @@ func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 			switch r.State {
 			case "done":
 				zipURL = r.FullZipURL
+				if zipURL == "" {
+					return nil, &APIError{Message: "MinerU 完成响应缺少结果地址"}
+				}
+			case "pending", "running", "waiting-file", "converting":
 			case "failed":
 				msg := r.ErrMsg
 				if msg == "" {
 					msg = "（未给出原因，常见于文件损坏或页数超限）"
 				}
 				return nil, fmt.Errorf("MinerU 解析失败: %s", msg)
+			default:
+				return nil, &APIError{Message: "MinerU 返回未知任务状态"}
 			}
 		}
 		if zipURL != "" {
 			break
 		}
-		time.Sleep(pollEvery)
+		if err := wait(ctx, interval); err != nil {
+			return nil, err
+		}
 	}
 
-	// 4. 下载并解压 zip
-	if err := downloadZip(ctx, zipURL, workDir); err != nil {
+	// Extract and validate only this response, then publish on the same volume.
+	if err := os.MkdirAll(workDir, 0755); err != nil {
 		return nil, err
 	}
-	return locate(workDir)
+	stage, err := os.MkdirTemp(workDir, ".parse-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(stage)
+	if err := downloadZip(ctx, zipURL, stage); err != nil {
+		return nil, err
+	}
+	result, err := locate(stage)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(stage, result.MDPath)
+	if err != nil {
+		return nil, err
+	}
+	published := filepath.Join(workDir, "result-"+strings.TrimPrefix(filepath.Base(stage), ".parse-"))
+	if err := os.Rename(stage, published); err != nil {
+		return nil, err
+	}
+	purgeStale(workDir, published)
+	return &Result{MDPath: filepath.Join(published, rel)}, nil
+}
+
+// purgeStale 发布成功后清理工作目录里历史解析产物与崩溃残留：本次发布的
+// result-* 保留，其余 result-*（旧解析）与 .parse-*（中断残留）删除。
+// 任务队列串行 + CLI 单跑，同一 workDir 无并发发布；删除失败不影响本次结果。
+func purgeStale(workDir, keep string) {
+	entries, err := os.ReadDir(workDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() || filepath.Join(workDir, name) == keep {
+			continue
+		}
+		if strings.HasPrefix(name, "result-") || strings.HasPrefix(name, ".parse-") {
+			_ = os.RemoveAll(filepath.Join(workDir, name))
+		}
+	}
 }
 
 // downloadZip 下载结果压缩包到临时文件后解压到 dir。
@@ -237,6 +308,9 @@ func downloadZip(ctx context.Context, url, dir string) error {
 	}
 	var totalWritten int64
 	for _, f := range zr.File {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if f.FileInfo().IsDir() {
 			continue
 		}
@@ -262,7 +336,7 @@ func downloadZip(ctx context.Context, url, dir string) error {
 			return err
 		}
 		// 解压限额按实际字节数计，不信任 zip 头声明的大小
-		n, err := io.Copy(out, io.LimitReader(rc, maxZipEntry+1))
+		n, err := io.Copy(out, contextReader{ctx, io.LimitReader(rc, maxZipEntry+1)})
 		out.Close()
 		rc.Close()
 		if err != nil {
@@ -279,19 +353,17 @@ func downloadZip(ctx context.Context, url, dir string) error {
 	return nil
 }
 
-// locate 在解压目录中找 Markdown：优先 full.md，否则取最大的 .md。
+// locate accepts one full.md, or one unambiguous Markdown document.
 func locate(dir string) (*Result, error) {
-	var mdPath, anyPath string
-	var anySize int64
+	var full, all []string
 	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
 		}
 		if strings.HasSuffix(strings.ToLower(info.Name()), ".md") {
+			all = append(all, p)
 			if strings.EqualFold(info.Name(), "full.md") {
-				mdPath = p // full.md 优先，直接锁定
-			} else if anyPath == "" || info.Size() > anySize {
-				anyPath, anySize = p, info.Size()
+				full = append(full, p)
 			}
 		}
 		return nil
@@ -299,13 +371,16 @@ func locate(dir string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if mdPath == "" {
-		mdPath = anyPath
-	}
-	if mdPath == "" {
+	if len(all) == 0 {
 		return nil, errors.New("解析结果 zip 中没有 Markdown 文件")
 	}
-	return &Result{Dir: dir, MDPath: mdPath}, nil
+	if len(full) == 1 {
+		return &Result{MDPath: full[0]}, nil
+	}
+	if len(full) == 0 && len(all) == 1 {
+		return &Result{MDPath: all[0]}, nil
+	}
+	return nil, errors.New("解析结果包含多个可能的正文，无法确定 Markdown 文件")
 }
 
 func postJSON(ctx context.Context, token, url string, body any, out *apiResp) (string, error) {
@@ -324,14 +399,7 @@ func postJSON(ctx context.Context, token, url string, body any, out *apiResp) (s
 		return "", fmt.Errorf("请求 MinerU 失败（检查网络）: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	if uerr := json.Unmarshal(raw, out); uerr != nil {
-		return string(raw), fmt.Errorf("MinerU 响应解析失败 HTTP %d: %s", resp.StatusCode, string(raw[:min(len(raw), 300)]))
-	}
-	return string(raw), nil
+	return decodeResponse(resp, out)
 }
 
 func getJSON(ctx context.Context, token, url string, out *apiResp) error {
@@ -345,5 +413,19 @@ func getJSON(ctx context.Context, token, url string, out *apiResp) error {
 		return fmt.Errorf("请求 MinerU 失败（检查网络）: %w", err)
 	}
 	defer resp.Body.Close()
-	return json.NewDecoder(resp.Body).Decode(out)
+	_, err = decodeResponse(resp, out)
+	return err
+}
+
+// Check cancellation while decompressing large entries, not only between files.
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }

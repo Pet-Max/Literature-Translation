@@ -17,7 +17,7 @@ outputs 静默为空、job 引用仓库文件但没有 checkout、外置脚本�
   R7  本地 uses:（./.github/...）路径必须存在
 
 扫描范围：.github/workflows/*.yml、.github/actions/**/*.yml、
-.github/workflows/scripts/*.{sh,ps1}。
+.github/scripts/*.{sh,ps1}。
 退出码：0 = 通过；1 = 存在违规（逐条打印 file:line）。
 """
 
@@ -30,7 +30,7 @@ import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 WF_DIR = os.path.join(ROOT, ".github", "workflows")
-SCRIPT_DIR = os.path.join(WF_DIR, "scripts")
+SCRIPT_DIR = os.path.join(ROOT, ".github", "scripts")
 
 R1 = re.compile(r"\$env:[A-Za-z_]+")
 R2 = re.compile(r"(?<!env:)\$GITHUB_[A-Z_]+")

@@ -39,7 +39,6 @@ type Options struct {
 	UserFontCSS string // 用户导入字体的 @font-face 片段（空=无）
 	TOC         bool   // 是否生成目录
 	TwoColumn   bool   // 双栏排版
-	Bilingual   bool   // 仅影响说明样式，双语内容本身已在 MD 中
 }
 
 // Build 把 Markdown 转为完整可打印的 HTML 文档（不含 KaTeX 脚本挂载）。
@@ -83,7 +82,7 @@ func Build(md string, opt Options) string {
 	b.WriteString(`<link rel="stylesheet" href="/assets/lxgw/lxgwwenkai-bold.css">` + "\n")
 	// 公式横线减细：Edge 打印把 KaTeX 的 0.75pt 横线取整得偏粗，视觉上
 	// 明显重于 LaTeX 标准（0.476pt）。scaleY(0.6) 实测压到 ~0.45pt
-	//（实验：_paper_candidates/katextest），横线越少越接近印刷质感。
+	// 该样式仅调整横线视觉厚度。
 	b.WriteString("<style>\n" + css + "\n" + twoCol +
 		"\n.mfrac .frac-line,.overline .overline-line{transform:scaleY(0.6);transform-origin:bottom}" +
 		"\nbody{font-family:" + font + "}\n" + opt.UserFontCSS + "\n</style>\n")
@@ -98,13 +97,21 @@ func Build(md string, opt Options) string {
 	return b.String()
 }
 
-// 占位符形态与 Python 引擎一致（U+27E6/U+27E7），但编号空间独立。
+// 渲染占位符使用 U+27E6/U+27E7，编号空间独立于翻译引擎。
 var (
-	phRe      = regexp.MustCompile("⟦M(\\d+)⟧")
 	fenceRe   = regexp.MustCompile("(?ms)^(?:```|~~~)[^\n]*\n.*?^(?:```|~~~)")
 	dispRe    = regexp.MustCompile(`(?s)\$\$.+?\$\$`)
 	escDollar = strings.NewReplacer(`\$`, "\x00ESC\x00")
 	unescape  = strings.NewReplacer("\x00ESC\x00", `\$`)
+)
+
+// 上下标（MinerU 用行内 HTML 表达：作者角标 <sup>2</sup>、化学式
+// <sub>2</sub>）。goldmark 默认把原始 HTML 换成 <!-- raw HTML omitted -->
+// 注释，标签剥掉后 "x²" 退化成 "x2"——与公式同构的冻结-回填通道放行
+// 这两个标签，回填时内容整体转义，不放宽 Unsafe（见 restoreMath）。
+var (
+	supRe = regexp.MustCompile(`<sup>(.*?)</sup>`)
+	subRe = regexp.MustCompile(`<sub>(.*?)</sub>`)
 )
 
 // boldCmdRe 把 \pmb / \bm（KaTeX 里是微弱的 text-shadow 假粗体）统一改写为
@@ -117,28 +124,43 @@ var boldCmdRe = regexp.MustCompile(`\\(?:pmb|bm)\b`)
 // 公式变红字/裸文本；在已是数学模式的上下文里 \( \) 本就无意义。
 var nestedMathDelimRe = regexp.MustCompile(`\\[()]`)
 
-// markdownToHTML：冻结数学/代码 → goldmark → 回填（KaTeX 定界符）。
+// markdownToHTML：冻结数学/代码/上下标 → goldmark → 回填（KaTeX 定界符）。
 func markdownToHTML(md string) string {
 	freezeMap := map[string]string{}
 	n := 0
-	add := func(s string) string {
-		if strings.Contains(s, "⟦M") {
-			return s // 已含占位符（嵌套匹配），不冻结
+	freezeSpan := func(s string) string {
+		var key string
+		for {
+			n++
+			key = fmt.Sprintf("⟦M%d⟧", n)
+			if !strings.Contains(md, key) {
+				break
+			}
 		}
-		n++
-		key := fmt.Sprintf("⟦M%d⟧", n)
 		freezeMap[key] = s
 		return key
+	}
+	add := func(s string) string {
+		for key := range freezeMap {
+			if strings.Contains(s, key) {
+				return s
+			}
+		}
+		return freezeSpan(s)
 	}
 
 	// \$ 不是定界符，临时替换避免干扰匹配
 	text := escDollar.Replace(md)
-	// 冻结顺序：围栏代码 → 行间公式 → 行内公式（先长后短）。
+	// 冻结顺序：围栏代码 → 行间公式 → 行内公式 → 上下标（先长后短）。
 	// 已含占位符的匹配不再冻结（如 $$…$$ 夹住代码围栏时，那不是公式，
-	// 嵌套冻结曾让回填顺序错乱、占位符以字面量泄漏进正文）
+	// 嵌套冻结曾让回填顺序错乱、占位符以字面量泄漏进正文）。
+	// 上下标冻结不能用 add：内含公式的 <sub>$…$</sub> 已持有占位符，
+	// 跳过会让 goldmark 剥掉标签；此处允许嵌套，回填先外后内自然解开。
 	text = fenceRe.ReplaceAllStringFunc(text, add)
 	text = dispRe.ReplaceAllStringFunc(text, add)
 	text = regexp.MustCompile(`\$[^$\n]+?\$`).ReplaceAllStringFunc(text, add)
+	text = supRe.ReplaceAllStringFunc(text, freezeSpan)
+	text = subRe.ReplaceAllStringFunc(text, freezeSpan)
 	text = unescape.Replace(text)
 
 	gm := goldmark.New(
@@ -154,31 +176,18 @@ func markdownToHTML(md string) string {
 	}
 	out := buf.String()
 
-	// 回填：数学套 KaTeX 定界符（HTML 转义后由浏览器解码）；
-	// 代码块还原为 pre/code。span+display:block 保证可出现在 <p> 内。
-	// 按键号从大到小逐个恢复：后冻结的是外层，先还原外层后，其内容里
-	// 嵌套的内层键才会被后续轮次处理（goldmark 输出里嵌套键只是普通
-	// 文本，ReplaceAllStringFunc 不会递归，乱序/单轮恢复会把内层键
-	// 以 ⟦M⟧ 字面量留在正文——repair 包 V4 验证中 862 处泄漏同因）。
-	for {
-		loc := phRe.FindStringIndex(out)
-		if loc == nil {
-			break
+	// 外层后冻结，按编号逆序恢复；不重新扫描恢复出的原文字面占位符。
+	// 编号在创建时避开原文，因此每个键只会展开一次，循环有明确上界。
+	for i := n; i > 0; i-- {
+		key := fmt.Sprintf("⟦M%d⟧", i)
+		if raw, ok := freezeMap[key]; ok {
+			out = strings.ReplaceAll(out, key, restoreMath(key, raw))
 		}
-		key := out[loc[0]:loc[1]]
-		raw, ok := freezeMap[key]
-		if !ok {
-			// 不在表中的占位符（正文恰好出现 ⟦M⟧ 文本）：去掉特殊定界符
-			// 改成普通文本，绕开再次匹配（防死循环）
-			out = out[:loc[0]] + "[M" + key[3:len(key)-1] + "]" + out[loc[1]:]
-			continue
-		}
-		out = out[:loc[0]] + restoreMath(key, raw) + out[loc[1]:]
 	}
 	return out
 }
 
-// restoreMath 把单个冻结区段还原为 HTML（代码块或 KaTeX 占位 span）。
+// restoreMath 把单个冻结区段还原为 HTML（代码块/ KaTeX 占位 span/上下标）。
 // 入口先还原冻结前转义的 \$：冻结发生在 \$→占位符替换之后，冻结区捕获
 // 的内容里残留 NUL+"ESC"+NUL 标记，不还原会以乱码进导出 HTML。
 func restoreMath(key, raw string) string {
@@ -196,6 +205,16 @@ func restoreMath(key, raw string) string {
 			code = strings.TrimRight(code, " \t")
 		}
 		return "<pre><code>" + html.EscapeString(strings.TrimSuffix(code, "\n")) + "</code></pre>"
+	}
+	// 上下标白名单回填：只放行标签名本身，内容整体 HTML 转义——
+	// 源 MD 混入的 <script> 等只会以纯文本出现，CSP/安全姿态不变。
+	// 内容里可能还嵌着内层公式的占位符（⟦Mn⟧ 不在转义范围），外层
+	// 先还原、内层数学由恢复循环的下一轮处理。
+	if strings.HasPrefix(raw, "<sup>") {
+		return "<sup>" + html.EscapeString(strings.TrimSuffix(strings.TrimPrefix(raw, "<sup>"), "</sup>")) + "</sup>"
+	}
+	if strings.HasPrefix(raw, "<sub>") {
+		return "<sub>" + html.EscapeString(strings.TrimSuffix(strings.TrimPrefix(raw, "<sub>"), "</sub>")) + "</sub>"
 	}
 	if strings.HasPrefix(raw, "$$") {
 		tex := strings.TrimSuffix(strings.TrimPrefix(raw, "$$"), "$$")
@@ -284,12 +303,16 @@ pre {
 }
 code { font-family:Consolas, monospace; }
 pre code { padding:0; background:none; }
+/* 上标不撑大行距：作者角标密集的标题区，默认 sup 会把该行 line-height
+   拉高，打印后与邻行疏密不均 */
+sup, sub { line-height:0; }
 .ktx { white-space:nowrap; }
 .ktx-disp {
   display:block; text-align:center; margin:.7em 0;
   overflow-x:auto; overflow-y:hidden;
 }
 .katex { font-size:1.06em; }
+.formula-error { color:#b42318; white-space:pre-wrap; }
 .katex-display { margin:0; }
 a { color:var(--teal); }
 hr { border:none; border-top:1px solid var(--line); margin:1.6em 0; }

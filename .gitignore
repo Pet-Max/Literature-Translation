@@ -6,6 +6,10 @@ build/package/
 # ============ 依赖与本地环境 ============
 node_modules/
 .env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
 
 # ============ 测试与剖析的本地产物 ============
 .playwright-cli/
@@ -13,6 +17,8 @@ node_modules/
 *.out
 *.prof
 *.log
+__pycache__/
+*.pyc
 
 # ============ Go 工作区（机器本地，不入库） ============
 go.work
@@ -31,3 +37,5 @@ Desktop.ini
 # ============ Windows 保留名坑：>nul 重定向在特殊环境会落地成真实文件 ============
 nul
 nul/
+output/
+*.bak

@@ -1,6 +1,3 @@
-// 本文件自 repair.go（v1.1.1 引擎校准域）按既有分段接缝切分而来，
-// 逻辑与切分前逐行一致（同包纯移动，零语义变化）。
-
 // 词表与归一：连字/重音符/行尾连字符与 BuildVocab。
 package repair
 
@@ -37,10 +34,6 @@ var ligatureMap = strings.NewReplacer(
 var accentMap = buildAccentMap()
 
 func buildAccentMap() map[string]rune {
-	type acc struct {
-		mark rune
-		base string // 该音符可作用的字母（大小写同映射，大小写字母各自列出）
-	}
 	m := map[string]rune{}
 	add := func(mark rune, pairs string) {
 		// pairs 形如 "aäeë..."：偶数位原字母，奇数位（下一字符）目标

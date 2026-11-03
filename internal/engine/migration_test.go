@@ -1,6 +1,6 @@
-// migration_test.go — M2 移植对拍：以 Python 母本（engine/*.py）在黄金
+// migration_test.go — 历史格式回归：以既有引擎在黄金
 // 样本上的输出为基准（internal/engine/testdata/*.json，由
-// _v1.2.0_baseline/gen_golden.py 生成），逐字节核对 Go 移植版行为。
+// _v1.2.0_baseline/gen_golden.py 生成），逐字节核对当前引擎行为。
 package engine
 
 import (

@@ -22,7 +22,8 @@ const fileCode = (path) => {
 
 function bindNav() {
   document.querySelectorAll(".nav-item").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
+      if (!settingsRecoveryBlocked && !(await requireSettingsSaved())) return;
       document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
@@ -57,7 +58,7 @@ function bindTitlebar() {
   };
   $("win-min").addEventListener("click", () => rt.WindowMinimise());
   maxBtn.addEventListener("click", toggleMax);
-  $("win-close").addEventListener("click", () => rt.Quit());
+  $("win-close").addEventListener("click", closeWithSettings);
   // 双击标题栏最大化/还原（Windows 惯例）；右侧按钮区已是 no-drag，排除之
   $("titlebar").addEventListener("dblclick", (e) => {
     if (e.target.closest(".win-controls") || e.target.closest(".theme-btn")) return;
@@ -327,6 +328,7 @@ function bindCardButtons() {
     b.dataset.bound = "1";
     b.addEventListener("click", async () => {
       try {
+        if (!(await requireSettingsSaved())) return;
         await App.QueueStartOne(b.dataset.startone);
         renderQueue();
       } catch (e) {
@@ -433,20 +435,22 @@ function bindModeSwitch() {
 
 // ------------------------------------------------ 设置页
 
-async function loadSettings() {
-  CFG = await App.GetConfig();
+async function loadSettings(config = null) {
+  CFG = config || await App.GetConfig();
+  CFG.glossary = copySettings(CFG.glossary_rows ?? CFG.glossary ?? []);
   $("cfg-mineru-token").value = CFG.mineru?.token || "";
   $("cfg-mineru-mode").value = CFG.mineru?.model_version || "vlm";
   $("cfg-llm-url").value = CFG.llm?.base_url || "";
   $("cfg-llm-key").value = CFG.llm?.api_key || "";
   $("cfg-llm-model").value = CFG.llm?.model || "";
   const concSel = $("cfg-llm-conc");
-  concSel.value = String(CFG.llm?.concurrency || 3);
+  const concurrency = String(CFG.llm?.concurrency || 3);
+ concSel.value = concurrency;
   // 手改配置文件设了选项外的并发值（2/4 等）时补一个临时选项，避免下拉显示空白
   if (concSel.selectedIndex < 0) {
     const o = document.createElement("option");
-    o.value = concSel.value;
-    o.textContent = concSel.value;
+    o.value = concurrency;
+    o.textContent = concurrency;
     concSel.appendChild(o);
     concSel.value = o.value;
   }
@@ -477,23 +481,27 @@ function renderGlossary() {
 
 function bindGlossary() {
   document.querySelectorAll("#glossary-box [data-gi]").forEach((inp) => {
-    inp.addEventListener("change", () => {
+    const update = (delay) => {
+      if (settingsComposing.has(inp)) return;
       const i = +inp.dataset.gi, k = inp.dataset.gk;
-      if (CFG.glossary[i]) CFG.glossary[i][k] = inp.value;
-    });
+      if (CFG.glossary[i]) {
+        CFG.glossary[i][k] = inp.value;
+        saveGlossary(delay);
+      }
+    };
+    inp.addEventListener("compositionstart", () => settingsComposing.add(inp));
+    inp.addEventListener("compositionend", () => { settingsComposing.delete(inp); update(600); });
+    inp.addEventListener("input", () => update(600));
+    inp.addEventListener("blur", () => update(0));
   });
   document.querySelectorAll("[data-gdel]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const g = CFG.glossary[+btn.dataset.gdel];
+      const i = +btn.dataset.gdel, g = CFG.glossary[i];
       if (!g) return;
-      if ((await showModal({
-        icon: "bad",
-        title: "删除这条术语？",
-        body: `<b>${esc(g.en)} → ${esc(g.zh)}</b> 将从术语表移除。`,
-        buttons: [{ label: "取消", kind: "ghost" }, { label: "删除", kind: "danger" }],
-      })) !== 1) return;
-      CFG.glossary.splice(+btn.dataset.gdel, 1);
-      renderGlossary();
+      if ((await showModal({icon:"bad", title:"删除这条术语？", body:`<b>${esc(g.en)} → ${esc(g.zh)}</b> 将从术语表移除。`, buttons:[{label:"取消",kind:"ghost"},{label:"删除",kind:"danger"}]})) !== 1) return;
+      const removed = copySettings(CFG.glossary.splice(i, 1)[0]);
+      renderGlossary(); saveGlossary();
+      showSettingsUndo("glossary", () => { CFG.glossary.splice(Math.min(i, CFG.glossary.length), 0, removed); renderGlossary(); saveGlossary(); });
     });
   });
 }
@@ -531,10 +539,10 @@ function ruleCardHTML(p, i) {
   let body = "";
   if (open && ruleEditing) {
     body = `
-      <textarea class="in rules-edit" data-rtext rows="12" spellcheck="false">${esc(p.text)}</textarea>
+      <textarea class="in rules-edit" data-rtext rows="12" spellcheck="false">${esc(p.draft_text ?? p.text)}</textarea>
       <div class="rule-actions">
-        <button class="btn primary" data-rsave="${i}">保存</button>
-        <button class="btn ghost-sm" data-rcancel>取消</button>
+        <button class="btn primary" data-rsave="${i}">应用到新任务</button>
+        <button class="btn ghost-sm" data-rcancel>完成编辑</button>
         <button class="btn ghost-sm" data-rreset="${i}">恢复默认</button>
         <span class="rules-count" data-rcount></span>
       </div>`;
@@ -552,7 +560,7 @@ function ruleCardHTML(p, i) {
       <div class="rule-row" data-rrow="${i}" role="button" tabindex="0" aria-expanded="${open}" title="展开查看">
         <span class="r-dot"></span>
         <span class="r-name" data-rname="${i}" title="点击改名">${esc(p.name)}</span>
-        ${live ? `<span class="r-live">生效中</span>` : ""}
+        ${live ? `<span class="r-live">生效中</span>` : ""}${p.draft_text !== undefined ? '<span class="r-draft">有未应用修改</span>' : ''}
         <span class="r-peek">${esc(peek)}</span>
         <svg class="r-chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.6 4.2 L6 7.6 L9.4 4.2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </div>
@@ -566,7 +574,9 @@ function bindRulesStatic() {
   const list = $("rule-list");
   list.addEventListener("click", onRuleListClick);
   list.addEventListener("input", (e) => {
-    if (e.target.matches("[data-rtext]")) updateRuleCount(e.target);
+    if (e.target.matches("[data-rtext]") && !e.isComposing) captureRuleDraft(e.target);
+  });
+  list.addEventListener("compositionend", (e) => { if (e.target.matches("[data-rtext]")) captureRuleDraft(e.target);
   });
   list.addEventListener("keydown", (e) => {
     if (e.target.matches(".rule-row") && (e.key === "Enter" || e.key === " ")) {
@@ -595,44 +605,31 @@ async function onRuleListClick(e) {
   if ((hit = m("data-rrow"))) return toggleRuleCard(+hit.dataset.rrow);
 }
 
-function editDirty() {
-  if (!ruleEditing || ruleOpen < 0) return false;
-  const ta = document.querySelector("#rule-list [data-rtext]");
-  return !!ta && ta.value !== presets()[ruleOpen].text;
+function captureRuleDraft(ta) {
+  if (ruleOpen < 0) return;
+  const p = presets()[ruleOpen];
+  if (ta.value === p.text) delete p.draft_text; else p.draft_text = ta.value;
+  updateRuleCount(ta); saveRulesDraft(600);
+  const row = ta.closest(".rule-card").querySelector(".rule-row");
+  row.querySelector(".r-draft")?.remove();
+  if (p.draft_text !== undefined) { const b = document.createElement("span"); b.className = "r-draft"; b.textContent = "有未应用修改"; row.appendChild(b); }
 }
-
-async function confirmDiscard() {
-  if (!editDirty()) return true;
-  return (await showModal({
-    icon: "warn",
-    title: "放弃未保存的修改？",
-    body: "预设的规则正文有<b>未保存的改动</b>，继续操作将丢弃这些修改。",
-    buttons: [{ label: "继续编辑", kind: "ghost" }, { label: "放弃修改" }],
-  })) === 1;
-}
-
-async function toggleRuleCard(i) {
+function toggleRuleCard(i) {
   if (ruleOpen === i) {
-    if (!(await confirmDiscard())) return;
     ruleEditing = false;
     ruleOpen = -1;
     renderRules();
     return;
   }
-  if (!(await confirmDiscard())) return;
   ruleEditing = false;
   ruleOpen = i;
   renderRules();
 }
 
 async function persistRules() {
-  try {
-    await App.SaveRules(CFG.rules.active, CFG.rules.presets);
-    return true;
-  } catch (e) {
-    localLog("error", "规则保存失败：" + e);
-    return false;
-  }
+  saveRulesDraft();
+  await drainSettings();
+  return !settingsJobs.has("rules");
 }
 
 function flashSaved(i) {
@@ -640,42 +637,46 @@ function flashSaved(i) {
   if (!row) return;
   const s = document.createElement("span");
   s.className = "r-saved";
-  s.textContent = "✓ 已保存";
+  s.textContent = "✓ 已应用";
   row.appendChild(s);
   setTimeout(() => s.remove(), 1800);
 }
 
 async function saveRuleText(i) {
+  const preset = presets()[i];
   const ta = document.querySelector("#rule-list [data-rtext]");
-  presets()[i].text = [...(ta ? ta.value : "")].slice(0, RULES_MAX).join("");
+  const text = ta ? ta.value : presets()[i].draft_text ?? presets()[i].text;
+  if (!text.trim() || [...text].length > RULES_MAX) {
+    await showModal({icon:"warn", title:"规则尚不能应用", body:`正文应为 1–${RULES_MAX} 个字符；草稿会保留，请修改后再应用。`}); return;
+  }
+  presets()[i].text = text; delete presets()[i].draft_text;
+  CFG.rules.active = presets()[i].name;
   if (!(await persistRules())) return;
-  ruleEditing = false;
-  renderRules();
-  flashSaved(i);
+  if (presets()[i] !== preset || ruleOpen !== i || preset.draft_text !== undefined) return;
+  ruleEditing = false; renderRules(); flashSaved(i);
 }
 
 function resetRuleText() {
   const ta = document.querySelector("#rule-list [data-rtext]");
   if (!ta) return;
   ta.value = DEFAULT_RULES_TEXT;
-  updateRuleCount(ta);
+  captureRuleDraft(ta);
   ta.focus();
 }
 
-async function setRuleLive(i) {
+function setRuleLive(i) {
   CFG.rules.active = presets()[i].name;
-  if (await persistRules()) {
-    renderRules();
-    flashSaved(i);
-  }
+  renderRules(); saveRulesDraft();
 }
 
 async function deleteRulePreset(i) {
   const ps = presets();
+  if (ps.length <= 1) return;
+  const removed = copySettings(ps[i]); const oldActive = CFG.rules.active;
   if ((await showModal({
     icon: "bad",
     title: `删除预设「${ps[i].name}」？`,
-    body: "该预设将被永久删除，<b>不可恢复</b>。",
+    body: "删除后 10 秒内可撤销。",
     buttons: [{ label: "取消", kind: "ghost" }, { label: "删除", kind: "danger" }],
   })) !== 1) return;
   ps.splice(i, 1);
@@ -683,11 +684,16 @@ async function deleteRulePreset(i) {
   ruleEditing = false;
   if (ruleOpen === i) ruleOpen = -1;
   else if (ruleOpen > i) ruleOpen -= 1;
-  if (await persistRules()) renderRules();
+  renderRules(); saveRulesDraft();
+  showSettingsUndo("rules", () => {
+    if (presets().some(p => p.name === removed.name)) { showModal({icon:"warn",title:"无法撤销",body:"已有同名预设，请先改名后再撤销。"}); return false; }
+    presets().splice(Math.min(i, presets().length), 0, removed);
+    if (oldActive === removed.name) CFG.rules.active = removed.name;
+    renderRules(); saveRulesDraft();
+  });
 }
 
-async function addRulePreset() {
-  if (!(await confirmDiscard())) return;
+function addRulePreset() {
   const ps = presets();
   const names = new Set(ps.map((p) => p.name));
   let n = ps.length + 1;
@@ -695,8 +701,7 @@ async function addRulePreset() {
   ps.push({ name: `预设${n}`, text: DEFAULT_RULES_TEXT });
   ruleEditing = true;
   ruleOpen = ps.length - 1;
-  await persistRules();
-  renderRules();
+  renderRules(); saveRulesDraft();
   const ta = document.querySelector("#rule-list [data-rtext]");
   if (ta) { ta.focus(); ta.setSelectionRange(0, 0); }
 }
@@ -710,9 +715,9 @@ function updateRuleCount(ta) {
 }
 
 // startRuleRename 名称就地改名：随时可改、立即落盘，与内容编辑态无关。
-async function startRuleRename(i) {
+function startRuleRename(i) {
   if (ruleEditing) {
-    if (!(await confirmDiscard())) return; // 与切换卡/新建一致：未保存先确认
+    // The editor's input events already retained the draft.
     ruleEditing = false; ruleOpen = -1; renderRules();
   }
   const nameEl = document.querySelector(`.rule-card[data-ri="${i}"] .r-name`);
@@ -724,10 +729,11 @@ async function startRuleRename(i) {
   input.select();
   input.addEventListener("click", (e) => e.stopPropagation());
   input.addEventListener("keydown", (e) => {
+    if (e.isComposing) return;
     if (e.key === "Enter") input.blur();
     if (e.key === "Escape") { input.dataset.cancel = "1"; input.blur(); }
   });
-  input.addEventListener("blur", async () => {
+  input.addEventListener("blur", () => {
     const name = input.dataset.cancel ? "" : input.value.trim().slice(0, 20);
     if (!name || name === p.name) { renderRules(); return; }
     if (presets().some((q, j) => q.name === name && j !== i)) {
@@ -737,16 +743,14 @@ async function startRuleRename(i) {
     }
     if (CFG.rules.active === p.name) CFG.rules.active = name;
     p.name = name;
-    if (await persistRules()) {
-      renderRules();
-      flashSaved(i);
-    }
+    renderRules(); saveRulesDraft();
   });
 }
 
 async function loadFontSection() {
   // || []：绑定层万一返回 null（Go nil 切片序列化形态）时不崩，空列表处理
   const list = (await App.FontList()) || [];
+ CFG.user_fonts = copySettings(list);
   const sel = $("cfg-font");
   sel.innerHTML = Object.entries(FONT_PRESETS)
     .map(([k, p]) => `<option value="${k}">${p.label}</option>`).join("") +
@@ -766,22 +770,33 @@ async function loadFontSection() {
       return;
     }
     if (!f) return;
+    // Keep the import action queued until it runs; a font selection must not replace it.
+    imp.disabled = sel.disabled = true;
     try {
-      const uf = await App.FontAdd(f);
-      await App.SetFontPreset("custom", uf.internal_name);
-      CFG = await App.GetConfig();
-      await loadFontSection();
-      localLog("info", `已导入字体：${uf.display_name}`);
+      let uf = null;
+      queueSettingsAction("output-font", async () => {
+        try {
+          if (uf && !((await App.FontList()) || []).some(f => f.internal_name === uf.internal_name && f.file_name === uf.file_name)) uf = null;
+          uf ||= await App.FontAdd(f);
+          await App.SetFontPreset("custom", uf.internal_name);
+          if (!settingsJobs.has("output-font")) { CFG.export.font_preset = "custom"; CFG.export.user_font = uf.internal_name; }
+          await loadFontSection();
+          localLog("info", `已导入字体：${uf.display_name}`);
+          return {export:{font_preset:"custom", user_font:uf.internal_name}};
+        } finally { imp.disabled = sel.disabled = false; }
+      });
     } catch (e) {
+      imp.disabled = sel.disabled = false;
       await showModal({ icon: "warn", title: "导入失败", body: esc(String(e)) });
     }
   });
   sel.addEventListener("change", async () => {
     const v = sel.value;
     try {
-      await App.SetFontPreset(FONT_PRESETS[v] ? v : "custom", FONT_PRESETS[v] ? "" : v);
-      CFG = await App.GetConfig();
+      const preset = FONT_PRESETS[v] ? v : "custom", user = FONT_PRESETS[v] ? "" : v;
+      CFG.export.font_preset = preset; CFG.export.user_font = user;
       updatePreview();
+      queueSettingsAction("output-font", () => App.SetFontPreset(preset, user), {export:{font_preset:preset, user_font:user}});
     } catch (e) {
       localLog("error", "切换字体失败：" + e);
     }
@@ -798,74 +813,41 @@ function renderPreviewKatex() {
   });
 }
 
-function updatePreview() {
-  const v = $("cfg-font").value;
-  let stack;
+let previewVersion = 0;
+const previewFaces = new Map();
+async function updatePreview() {
+  const mine = ++previewVersion;
+  const v = $("cfg-font").value, hint = $("font-preview-status");
+  const fallback = FONT_PRESETS.lxgw.stack;
+  hint.textContent = "";
   if (FONT_PRESETS[v]) {
-    stack = FONT_PRESETS[v].stack;
+    $("font-preview").style.fontFamily = FONT_PRESETS[v].stack;
   } else {
-    const uf = (CFG.user_fonts || []).find((u) => u.internal_name === v);
-    stack = `"${uf ? uf.internal_name : v}","Times New Roman","LXGW WenKai","Microsoft YaHei",serif`;
-  }
-  $("font-preview").style.fontFamily = stack;
-  renderPreviewKatex();
-}
-
-function collectSettings() {
-  const c = JSON.parse(JSON.stringify(CFG));
-  c.mineru.token = $("cfg-mineru-token").value;
-  c.mineru.model_version = $("cfg-mineru-mode").value;
-  c.llm.base_url = $("cfg-llm-url").value;
-  c.llm.api_key = $("cfg-llm-key").value;
-  c.llm.model = $("cfg-llm-model").value;
-  c.llm.concurrency = parseInt($("cfg-llm-conc").value) || 3;
-  // 规则预设：正文与 active 已由 input/click 实时同步进 CFG，随深拷贝带走
-  c.rules = { active: CFG.rules.active, presets: CFG.rules.presets, user_global: "" };
-  c.export.bilingual = $("cfg-bilingual").checked;
-  c.export.toc = $("cfg-toc").checked;
-  c.export.two_column = $("cfg-twocolumn").checked;
-  c.translate.skip_references = $("cfg-skiprefs").checked;
-  c.repair.spelling = $("cfg-repair").checked;
-  c.repair.symbols = $("cfg-repair-symbols").checked;
-  c.export.output_dir = $("cfg-outdir").value;
-  // 字体下拉的变更即时经 SetFontPreset 落盘并刷新 CFG，这里随深拷贝带上
-  c.export.font_preset = CFG.export?.font_preset || "lxgw";
-  c.export.user_font = CFG.export?.user_font || "";
-  c.glossary = CFG.glossary.filter((g) => g.en.trim() && g.zh.trim());
-  return c;
-}
-
-// 脏状态：全局保存管辖的字段一有改动就亮「有未保存的修改」；
-// 规则卡/字体下拉等即时落盘的控件不计入。
-let settingsDirty = false;
-function markSettingsDirty(e) {
-  if (e && e.target.closest("#rule-list,#btn-rule-add,#cfg-font,#font-import,#mineru-link")) return;
-  if (settingsDirty) return;
-  settingsDirty = true;
-  $("dirty-pill").classList.add("show");
-}
-function clearSettingsDirty() {
-  settingsDirty = false;
-  $("dirty-pill").classList.remove("show");
-}
-
-function bindSave() {
-  $("btn-save-config").addEventListener("click", async () => {
+    $("font-preview").style.fontFamily = fallback;
+    const uf = (CFG.user_fonts || []).find(u => u.internal_name === v);
     try {
-      await App.SaveConfig(collectSettings());
-      CFG = await App.GetConfig();
-      clearSettingsDirty();
-      $("save-hint").textContent = "✓ 已保存 " + new Date().toLocaleTimeString();
-      setTimeout(() => ($("save-hint").textContent = ""), 3000);
-    } catch (e) {
-      $("save-hint").textContent = "保存失败：" + e;
+      if (!uf || !uf.file_name) throw new Error("字体未注册");
+      let load = previewFaces.get(uf.file_name);
+      if (!load) {
+        const family = "ImportedPreview" + (previewFaces.size + 1);
+        load = (async () => {
+          const face = await new FontFace(family, `url("/userfonts/${encodeURIComponent(uf.file_name)}")`).load();
+          document.fonts.add(face);
+          await document.fonts.load(`16px "${family}"`, $("font-preview").textContent);
+          return family;
+        })();
+        previewFaces.set(uf.file_name, load);
+        load.catch(() => previewFaces.delete(uf.file_name));
+      }
+      const family = await load;
+      if (mine !== previewVersion) return;
+      $("font-preview").style.fontFamily = `"${family}",${fallback}`;
+    } catch {
+      if (mine !== previewVersion) return;
+      hint.textContent = "字体加载失败，已使用默认字体预览";
     }
-  });
-  $("g-add").addEventListener("click", () => {
-    CFG.glossary = CFG.glossary || [];
-    CFG.glossary.push({ en: "", zh: "" });
-    renderGlossary();
-  });
+  }
+  if (mine === previewVersion) renderPreviewKatex();
 }
 
 // ------------------------------------------------ 日志
@@ -979,35 +961,37 @@ function showModal(opt) {
   });
 }
 
-// 连接测试小图标：点击测试，四态（idle/spin/ok/bad），输入改动即重置
+// Tests always use current inputs and ignore responses for superseded inputs.
 function bindConnTests() {
   document.querySelectorAll(".conn-dot").forEach((dot) => {
     const kind = dot.dataset.conn;
-    const input = dot.parentElement.querySelector("input");
-    const set = (cls, label) => {
+    const ids = kind === "llm" ? ["cfg-llm-url", "cfg-llm-key", "cfg-llm-model"] : ["cfg-mineru-token"];
+    let version = 0;
+    const message = document.createElement("div"); message.className = "conn-message";
+    message.setAttribute("role", "status"); message.setAttribute("aria-live", "polite");
+    const wrap = dot.parentElement, host = document.createElement("div");
+    wrap.replaceWith(host); host.append(wrap, message);
+    const set = (cls, label = "测试连接") => {
       dot.className = "conn-dot " + cls;
-      dot.textContent = cls === "spin" ? "◌" : cls === "ok" ? "✓" : cls === "bad" ? "✕" : "⇄";
-      if (label) dot.title = label; else dot.title = "测试连接";
+      dot.textContent = cls === "spin" ? "◌" : cls === "ok" ? "✓" : cls === "info" ? "ⓘ" : cls === "bad" ? "✕" : cls === "warning" ? "!" : "⇄";
+      dot.title = label; dot.setAttribute("aria-label", label);
+      message.textContent = cls === "idle" ? "" : label;
     };
     dot.addEventListener("click", async () => {
       if (dot.classList.contains("spin")) return;
+      const mine = ++version;
+      const values = ids.map(id => $(id).value);
       set("spin", "测试中…");
       try {
-        if (kind === "llm") {
-          const n = await App.TestLLM();
-          set("ok", `连通 · ${n} 个模型`);
-          localLog("info", `LLM 接口连通：${n} 个模型`);
-        } else {
-          const msg = await App.TestMinerU();
-          set("ok", msg);
-          localLog("info", "MinerU " + msg);
-        }
-      } catch (e) {
-        set("bad", String(e));
-        localLog("warn", "连接测试失败（" + (kind === "llm" ? "LLM" : "MinerU") + "）：" + e);
+        const r = kind === "llm" ? await App.TestLLMWithConfig(values[0], values[1]) : await App.TestMinerUWithConfig(values[0]);
+        if (mine !== version || values.some((v,i) => v !== $(ids[i]).value)) return;
+        set(r.status === "ok" ? "ok" : r.status === "info" ? "info" : r.status === "warning" ? "warning" : "bad", r.message);
+        localLog(r.status === "ok" || r.status === "info" ? "info" : "warn", (kind === "llm" ? "LLM：" : "MinerU：") + r.message);
+      } catch {
+        if (mine === version) set("bad", "连接检测未完成，请重试");
       }
     });
-    input.addEventListener("input", () => set("idle"));
+    ids.forEach(id => $(id).addEventListener("input", () => { ++version; set("idle"); }));
   });
 }
 
@@ -1070,6 +1054,7 @@ function bindFetchModels() {
   const input = $("cfg-llm-model");
   const pop = $("model-pop");
   let models = [];
+  let modelVersion = 0;
   let open = false;
   let armAt = 0; // 面板打开后延迟武装“点外关闭”，防同一次点击的余波误关
 
@@ -1083,7 +1068,7 @@ function bindFetchModels() {
     pop.innerHTML = `<div class="mp-head">
         <span>共 ${models.length} 个模型 · 点击选择</span>
         <button class="mp-close" aria-label="关闭">✕</button>
-      </div>` + list;
+      </div><div class="mp-list">${list}</div>`;
     pop.querySelector(".mp-close").addEventListener("click", closePop);
     pop.querySelectorAll(".mp-item").forEach((it) => {
       it.addEventListener("click", () => {
@@ -1109,12 +1094,18 @@ function bindFetchModels() {
     btn.disabled = true;
     const old = btn.textContent;
     btn.textContent = "拉取中…";
+    const requestVersion = modelVersion;
     try {
-      models = await App.FetchModels();
+      const mine = requestVersion;
+      const url = $("cfg-llm-url").value, key = $("cfg-llm-key").value;
+      const fetched = await App.FetchModelsWithConfig(url, key);
+      if (mine !== modelVersion || url !== $("cfg-llm-url").value || key !== $("cfg-llm-key").value) { btn.disabled = false; btn.textContent = old; return; }
+      models = fetched;
       localLog("info", `已拉取 ${models.length} 个上游模型`);
       btn.textContent = `✓ ${models.length} 个`;
       openPop();
     } catch (e) {
+      if (requestVersion !== modelVersion) { btn.textContent = old; btn.disabled = false; return; }
       btn.textContent = "拉取失败";
       localLog("error", "拉取模型失败：" + e);
       setTimeout(() => (btn.textContent = old), 1600);
@@ -1123,6 +1114,9 @@ function bindFetchModels() {
     }
     setTimeout(() => { btn.textContent = old; btn.disabled = false; }, 1800);
   });
+  ["cfg-llm-url", "cfg-llm-key"].forEach(id => $(id).addEventListener("input", () => {
+    modelVersion++; models = []; closePop();
+  }));
   input.addEventListener("input", () => { if (open) renderPop(input.value.trim()); });
   input.addEventListener("focus", () => { if (models.length && !open) openPop(); });
   document.addEventListener("pointerdown", (e) => {
@@ -1156,7 +1150,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     bindDrop();
     bindModeSwitch();
     bindQueueButtons();
-    bindSave();
+    bindAutosave();
     bindLog();
     bindRulesStatic();
     // 侧栏底部 GitHub 入口：走系统默认浏览器（WebView 内不能开外链）
@@ -1173,7 +1167,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     $("btn-queue-toggle").addEventListener("click", async () => {
       try {
         if (QUEUE_STATE.running) await App.QueuePause();
-        else await App.QueueStart();
+        else { if (!(await requireSettingsSaved())) return; await App.QueueStart(); }
         renderQueue();
       } catch (e) {
         localLog("error", "队列操作失败：" + e);
@@ -1183,11 +1177,10 @@ window.addEventListener("DOMContentLoaded", async () => {
     rt.EventsOn("queue:change", () => renderQueue());
     rt.EventsOn("log:line", (line) => appendLog(line));
     await loadSettings();
-    // 脏监听延迟绑定：跳过 WebView 自动填充密码框时触发的 input 事件
-    setTimeout(() => {
-      $("view-settings").addEventListener("input", markSettingsDirty);
-      $("view-settings").addEventListener("change", markSettingsDirty);
-    }, 800);
+    initSettingsBaseline();
+    await checkConfigRecovery();
+    settingsReady = !settingsRecoveryBlocked;
+    if (App.FrontendReady) await App.FrontendReady();
     renderQueue();
     const tail = await App.GetLogTail();
     logLines = tail.slice();
@@ -1197,16 +1190,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     let VER = "?";
     try { VER = await App.Version(); } catch (e) { /* 无绑定时显示 ? */ }
     $("about-version").textContent = VER;
-    // DOM 方式写入（不拼 innerHTML）：内容即使将来来源变化也不构成注入面
-    const fontsOk = CFG.mineru?.token && CFG.llm?.api_key;
-    const sb = $("sidebar-status");
-    sb.textContent = `${VER} `;
-    const dot = document.createElement("span");
-    dot.className = "dot";
-    dot.textContent = "●";
-    if (!fontsOk) dot.style.color = "var(--bad)";
-    sb.appendChild(dot);
-    sb.appendChild(document.createTextNode(fontsOk ? " 就绪" : " 待配置"));
+    sidebarVersion = VER;
+    renderSidebarStatus();
   } catch (e) {
     // 初始化链断裂时状态栏会永远停在 index.html 的占位文案「引擎启动中…」，
     // 这里把真实错误亮出来，避免启动故障伪装成正常状态

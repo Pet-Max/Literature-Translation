@@ -76,7 +76,7 @@ func MarkdownToHTMLForTest(md string) string {
 func TestNestedFreezeRestore(t *testing.T) {
 	// 代码围栏夹在 $$…$$ 之间：含占位符的匹配不再冻结成"公式"，
 	// 围栏按代码块还原，$$ 落为普通文本，不得出现 ⟦M⟧ 字面量泄漏
-	// （repair/render 两处同源 bug，V4 全库验证泄漏 862 处）
+	// （repair/render 两处同源 bug，历史全库验证曾泄漏 862 处）
 	md := "before\n\n$$\n```\nfenced $$ inner\n```\n$$\n\nafter"
 	out := Build(md, Options{Title: "T"})
 	if strings.Contains(out, "⟦M") || strings.Contains(out, "[M1]") {
