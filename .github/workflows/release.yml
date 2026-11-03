@@ -88,8 +88,6 @@ jobs:
   build:
     name: 构建主程序
     needs: [gate, resolve]
-    outputs:
-      artifact_id: ${{ steps.staging.outputs.artifact-id }}
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
@@ -181,9 +179,8 @@ jobs:
           Copy-Item LICENSE $stage/
 
       - uses: actions/upload-artifact@v4
-        id: staging
         with:
-          # 名称区分重跑批次，下游只使用本次生产者输出的精确 ID
+          # 名称带 run_attempt：区分重跑批次，下游按本次 attempt 名精确取包
           name: staging-${{ github.run_attempt }}
           path: build/package/Literature-Translation
           retention-days: 3
@@ -192,8 +189,6 @@ jobs:
   # ── Job 4：打包便携版（与安装版并行，独立计时） ────────────────────────
   package-portable:
     name: 打包便携版
-    outputs:
-      artifact_id: ${{ steps.portable.outputs.artifact-id }}
     needs: [build, resolve]
     runs-on: windows-latest
     timeout-minutes: 15
@@ -202,9 +197,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          name: staging-${{ github.run_attempt }}
           path: build/package/Literature-Translation
-          merge-multiple: true
       - name: Portable zip
         shell: pwsh
         env:
@@ -213,7 +207,6 @@ jobs:
           New-Item -ItemType Directory -Force build/bin | Out-Null
           Compress-Archive -Force -Path build/package/Literature-Translation -DestinationPath "build/bin/Literature-Translation-${env:RELEASE_TAG}-windows-amd64-portable.zip"
       - uses: actions/upload-artifact@v4
-        id: portable
         with:
           name: portable-${{ github.run_attempt }}
           path: build/bin/*-portable.zip
@@ -223,8 +216,6 @@ jobs:
   # ── Job 5：打包安装版（与便携版并行，独立计时） ────────────────────────
   package-installer:
     name: 打包安装版
-    outputs:
-      artifact_id: ${{ steps.installer.outputs.artifact-id }}
     needs: [build, resolve]
     runs-on: windows-latest
     timeout-minutes: 15
@@ -237,9 +228,8 @@ jobs:
           ref: ${{ needs.resolve.outputs.checkout_ref }}
       - uses: actions/download-artifact@v4
         with:
-          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          name: staging-${{ github.run_attempt }}
           path: build/package/Literature-Translation
-          merge-multiple: true
       - name: Installer (Inno Setup)
         shell: pwsh
         env:
@@ -253,7 +243,6 @@ jobs:
           & $iscc "/DAppVersion=$env:RELEASE_VERSION" build/installer/installer.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
       - uses: actions/upload-artifact@v4
-        id: installer
         with:
           name: installer-${{ github.run_attempt }}
           path: build/bin/*-Setup-*.exe
@@ -281,7 +270,7 @@ jobs:
           ref: ${{ github.sha }}
       - uses: actions/download-artifact@v4
         with:
-          artifact-ids: ${{ needs.package-portable.outputs.artifact_id }},${{ needs.package-installer.outputs.artifact_id }}
+          pattern: "{portable,installer}-${{ github.run_attempt }}"
           path: dist
           merge-multiple: true
 
