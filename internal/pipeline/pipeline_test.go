@@ -214,8 +214,14 @@ func TestRunMetadataGuardsAndFingerprints(t *testing.T) {
 }
 
 func TestTaskFontSurvivesUnregister(t *testing.T) {
+	const source = `C:\Windows\Fonts\simhei.ttf`
+	// 与 fonts_test 同款守卫：CI runner（英文版 Windows）没有 CJK 字体，
+	// 且 Validate 拒收纯拉丁字体，无法用其他系统字体重写该测试。
+	if _, err := os.Stat(source); err != nil {
+		t.Skip("系统无 simhei.ttf，跳过")
+	}
 	t.Setenv("APPDATA", t.TempDir())
-	uf, e := fonts.Add(`C:\Windows\Fonts\simhei.ttf`)
+	uf, e := fonts.Add(source)
 	if e != nil {
 		t.Fatal(e)
 	}
