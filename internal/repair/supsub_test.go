@@ -45,6 +45,32 @@ func TestUnwrapProseSupSub_WordCountThreshold(t *testing.T) {
 	}
 }
 
+func TestUnwrapProseSupSub_CJKThreshold(t *testing.T) {
+	// 中文译文没有词间空格（词数判据失效），长度 16 rune 也远未到拉丁
+	// 上限——必须按 CJK 字符数判散文，否则整句重新变成小号下标
+	// （实证形态：LLM 把下标内容也翻译了，h<sub>表明，……极限。</sub>）。
+	st := Stats{}
+	in := "我们的结果 h<sub>表明，热机可以缩减到单原子的极限。</sub>"
+	// 标签外的游离 h 不属解包职责（与英文用例 "h"+"demonstrate" 粘连同构，
+	// 英文由词级校准收尾；中文侧的孤立拉丁字母留给人工）。
+	want := "我们的结果 h表明，热机可以缩减到单原子的极限。"
+	if out := unwrapProseSupSub(in, &st); out != want {
+		t.Fatalf("CJK 散文下标未解包:\n got: %s\nwant: %s", out, want)
+	}
+	if st.SupSub != 1 {
+		t.Fatalf("SupSub = %d, 期望 1", st.SupSub)
+	}
+	// 合法短 CJK 角标（≤4 字）不受影响
+	st2 := Stats{}
+	keep := "临界温度记作 T<sub>特</sub>，见注<sup>注 1</sup>"
+	if out := unwrapProseSupSub(keep, &st2); out != keep {
+		t.Fatalf("合法短 CJK 角标被误伤:\n got: %s", out)
+	}
+	if st2.SupSub != 0 {
+		t.Fatalf("SupSub = %d, 期望 0", st2.SupSub)
+	}
+}
+
 // 用户实例端到端：结构解包后，词级校准把粘连出的 "hdemonstrate"
 // 修回 "demonstrate"（编辑距离 1、词表内唯一候选）。
 func TestCalibrateUnwrapsProseSubscript(t *testing.T) {

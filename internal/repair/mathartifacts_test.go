@@ -22,6 +22,8 @@ func TestMathArtifacts_CorpusCases(t *testing.T) {
 		// R4：伪上标（某图注 "4 V," 被整体上标）
 		{"R4 伪上标", "amplitude of $^ { 4 \\mathrm { V } , }$ we", "amplitude of 4 V, we"},
 		{"R4 分号收尾", "noise of $^ { 2 \\mathrm { mW } ; }$ then", "noise of 2 mW; then"},
+		// R4 双句读去重：MinerU 把逗号既包进伪上标又落在 math 外（实证形态）
+		{"R4 双逗号去重", "amplitude of $^ { 4 \\mathrm { V } , }$ , we calculate", "amplitude of 4 V, we calculate"},
 		// R5：公式后冗余下标残片（\bar{n}_r 后跟 <sub>r</sub> 的实证形态）
 		{"R5 冗余残片", "$\\bar { n } _ { \\mathrm { r } } = k _ { B } T / \\hbar \\omega _ { i }$ <sub>r</sub> 随",
 			"$\\bar { n } _ { \\mathrm { r } } = k _ { B } T / \\hbar \\omega _ { i }$ 随"},

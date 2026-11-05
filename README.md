@@ -21,14 +21,14 @@
 ## 主要功能
 
 - **智能路由**：按语言自动分流——英文 PDF 全流程、英文 MD 直接翻译、中文 MD 仅导出、中文 PDF 秒拒
-- **解析校准**：以原 PDF 文本层为参照，自动修复解析损伤（符号、拼写、真词、重音符、控制码）；HTML 表格自动转 Markdown，可离线重跑
+- **解析校准**：以原 PDF 文本层为参照，自动修复解析损伤（符号、拼写、真词、重音符、控制码、数学伪影、上下标）；HTML 表格自动转 Markdown，可离线重跑
 - **公式零损伤**：公式整体冻结、原样保留，机械校验不合格自动重试；公式横线贴近 LaTeX 印刷粗细
-- **规则与术语**：多套规则预设可编辑切换；术语表统一译名
+- **规则与术语**：内置「物理」与「通用学术」双预设，多套规则可编辑切换；术语表统一译名
 - **双语对照**：译文段落后附原文，方便核对
 - **断点续跑**：译文即时落盘，中断重跑自动跳过已完成段
 - **文献归档**：每篇一个档案夹，四类产物与过程文件全保留——`01_en_pdf` 原文 PDF · `02_en_md` 英文 MD · `03_zh_md` 中文 MD · `04_zh_pdf` 成品
+- **自动保存**：设置改动即时落盘，关闭窗口前自动收尾未保存的修改
 - **字体与主题**：三套字体方案（文楷内嵌）+ 自定义导入；浅深双主题一键切换
-- **队列控制**：任务手动调度，支持暂停与单卡优先
 
 ## 快速开始
 
@@ -64,7 +64,7 @@ scripts\build.bat
 2. 填入 MinerU API Token（点「前往 API 管理 ↗」直达获取页）
 3. 填入 LLM 模型 API 地址、API Key、模型名（可点「拉取模型」从上游列表选择）
 4. 点输入框右侧 ⇄ 图标测试连通，两个 ✓ 就绪
-5. 点「保存设置」
+5. 改动自动保存——卡片右上角出现 ✓ 已保存即生效
 
 ### 使用
 
@@ -81,7 +81,7 @@ scripts\build.bat
 
 `MINERU_TOKEN`（或 `MINERU_API_TOKEN`）、`LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`。
 
-注意：若之后在设置页点过「保存设置」，页面回显的值（含环境变量注入的）会写入 `config.json`。
+注意：设置按字段自动保存；环境变量注入的值若未经编辑，不会写入 `config.json`。
 
 ## 常见问题
 
@@ -101,7 +101,7 @@ scripts\build.bat
 
 ```
 main.go        GUI 入口（Wails v2，go:embed 前端资源）
-app/           Wails 绑定层（队列、配置、连接测试；路由测试在此）
+app/           Wails 绑定层（队列、设置、连接测试、恢复、字体导入）
 cmd/literature-translation/   CLI 入口（与 GUI 共用 internal/pipeline）
 internal/      能力包：config / pipeline / engine（内置 Go 翻译引擎：切段→冻结→
                翻译→校验→回填）/ pdftext（PDF 文本层）/ mineru / render /
@@ -153,7 +153,7 @@ scripts\check.bat
 go test ./internal/pipeline -fuzz FuzzNewArchivePlan -fuzztime 30s
 
 # 前端组件 E2E：Playwright 驱动真实前端 + mock 壳（需 Chrome/Edge）
-npm i --no-save playwright-core
+npm ci
 node tests/e2e_frontend.mjs
 ```
 

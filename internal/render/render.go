@@ -18,6 +18,8 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
+
+	"literature-translation/internal/repair"
 )
 
 //go:embed assets
@@ -210,11 +212,19 @@ func restoreMath(key, raw string) string {
 	// 源 MD 混入的 <script> 等只会以纯文本出现，CSP/安全姿态不变。
 	// 内容里可能还嵌着内层公式的占位符（⟦Mn⟧ 不在转义范围），外层
 	// 先还原、内层数学由恢复循环的下一轮处理。
-	if strings.HasPrefix(raw, "<sup>") {
-		return "<sup>" + html.EscapeString(strings.TrimSuffix(strings.TrimPrefix(raw, "<sup>"), "</sup>")) + "</sup>"
-	}
-	if strings.HasPrefix(raw, "<sub>") {
-		return "<sub>" + html.EscapeString(strings.TrimSuffix(strings.TrimPrefix(raw, "<sub>"), "</sub>")) + "</sub>"
+	// 散文级内容（repair.IsProseSupSub 同判据）去标签保留纯文本：
+	// 这是最后一道网——翻译输出/旧归档 md 里的整句 sup/sub（LLM 把
+	// 下标内容也译了等）不在此处拦截，就会排成小号下标。
+	if strings.HasPrefix(raw, "<sup>") || strings.HasPrefix(raw, "<sub>") {
+		open, close := "<sup>", "</sup>"
+		if strings.HasPrefix(raw, "<sub>") {
+			open, close = "<sub>", "</sub>"
+		}
+		content := strings.TrimSuffix(strings.TrimPrefix(raw, open), close)
+		if repair.IsProseSupSub(content) {
+			return html.EscapeString(content)
+		}
+		return open + html.EscapeString(content) + close
 	}
 	if strings.HasPrefix(raw, "$$") {
 		tex := strings.TrimSuffix(strings.TrimPrefix(raw, "$$"), "$$")

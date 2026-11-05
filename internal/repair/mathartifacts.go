@@ -3,6 +3,7 @@
 //
 //	R1 `\ :` → `\:`　　间距宏被裂成「反斜杠+空格+冒号」，KaTeX 渲染出真冒号
 //	                   （实证语料全覆盖；文本层证实原文无冒号，源是间距宏 \:）
+//
 // 引号恢复由 symbols.go 执行，须有原文引号证据；数字上标本身不作为判据。
 //
 //	R3 $\operatorname{Eq.}$ . (3) → Eq. (3)　公式引用编号被甩出 math，下游
@@ -37,6 +38,11 @@ var (
 	dupSupFragRe = regexp.MustCompile(`(\$[^$\n]+?\$) ?<sup>([^<]{1,30}?)</sup>`)
 	// R4 还原内容时剥 \mathrm 包装（惰性捕获避开花括号内空格；嵌套形态原样保留）
 	mathrmWrapRe = regexp.MustCompile(`\\mathrm ?\{ ?([^{}]*?) ?\}`)
+	// R4 后置：还原后紧随的同句读（4 V, , we → 4 V, we）。MinerU 偶发把
+	// 句读既包进伪上标又落在 math 外——去重必须在整体层做（fixInlineMath
+	// 只见 span 自身，看不到 span 后的文本）。代码块/URL 已冻结不受影响。
+	dupCommaRe = regexp.MustCompile(`, , ?`)
+	dupSemiRe  = regexp.MustCompile(`; ; ?`)
 )
 
 // fixMathArtifacts 数学区伪影归一入口。围栏与 URL 先冻结（与 freeze 同序），
@@ -69,6 +75,24 @@ func fixMathArtifacts(text string, st *Stats) string {
 		return fixInlineMath(m, st)
 	})
 
+	// R4 后置去重：伪上标句读还原后，与紧随的同句读合并（整体层才能看到
+	// span 外的文本）。仅处理单空格分隔的同句读，学术正文不存在合法的
+	// 「, ,」「; ;」形态。
+	for _, d := range []struct {
+		re  *regexp.Regexp
+		rep string
+		tag string
+	}{
+		{dupCommaRe, ", ", "双逗号"},
+		{dupSemiRe, "; ", "双分号"},
+	} {
+		if fixed := d.re.ReplaceAllString(text, d.rep); fixed != text {
+			st.MathFix++
+			st.detail("R4 " + d.tag + "去重")
+			text = fixed
+		}
+	}
+
 	keys := make([]string, 0, len(prot))
 	for k := range prot {
 		keys = append(keys, k)
@@ -91,14 +115,14 @@ func fixDisplayMath(m string, st *Stats) string {
 	return out
 }
 
-// fixInlineMath 行内公式：R1 + R4 伪上标还原。
+// fixInlineMath 行内公式：R1 + R4 伪上标还原（重复句读由整体层后置去重）。
 func fixInlineMath(m string, st *Stats) string {
 	out := fixDisplayMath(m, st)
-	if g := bogusSupRe.FindStringSubmatch(out); g != nil {
-		content := unwrapMathrm(g[1]) + g[2] // 句读还原到内容尾部
+	if loc := bogusSupRe.FindStringSubmatchIndex(out); loc != nil {
+		content := unwrapMathrm(out[loc[2]:loc[3]]) + out[loc[4]:loc[5]] // 句读还原到内容尾部
 		st.MathFix++
-		st.detail("伪上标还原：" + g[0] + " → " + content)
-		out = strings.Replace(out, g[0], content, 1)
+		st.detail("伪上标还原：" + out[loc[0]:loc[1]] + " → " + content)
+		out = out[:loc[0]] + content + out[loc[1]:]
 	}
 	return out
 }

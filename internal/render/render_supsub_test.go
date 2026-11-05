@@ -49,6 +49,29 @@ func TestBuildSupSubWithInnerMath(t *testing.T) {
 	}
 }
 
+func TestBuildUnwrapsProseSupSub(t *testing.T) {
+	// 渲染层兜底（与 repair.IsProseSupSub 同判据）：整句级的 sup/sub 不排
+	// 小号下标——实证形态：LLM 翻译把下标内容也译了，中文无词间空格、
+	// 长度未到拉丁上限，只有 CJK 字符数判据能拦住。
+	for _, c := range []struct{ raw, plain string }{
+		{"我们的结果 h<sub>表明，热机可以缩减到单原子的极限。</sub>", "表明，热机可以缩减到单原子的极限。"},
+		{"up to <sup>a b c d e f g</sup> here", "a b c d e f g"},
+	} {
+		out := Build(c.raw, Options{Title: "t"})
+		if strings.Contains(out, "<sub>表明") || strings.Contains(out, "<sup>a b c") {
+			t.Fatalf("散文内容仍排成上下标:\n%s", out)
+		}
+		if !strings.Contains(out, c.plain) {
+			t.Fatalf("散文内容丢失:\n%s", out)
+		}
+	}
+	// 合法短 CJK 角标（≤4 字）保留
+	keep := Build("临界温度 T<sub>特</sub> 与注<sup>注 1</sup>", Options{Title: "t"})
+	if !strings.Contains(keep, "<sub>特</sub>") || !strings.Contains(keep, "<sup>注 1</sup>") {
+		t.Fatalf("合法短 CJK 角标被误伤:\n%s", keep)
+	}
+}
+
 func TestLiteralPlaceholderAndNestedSup(t *testing.T) {
 	for _, md := range []string{"<sup>⟦M1⟧</sup>", "<sub>$x_1$</sub> ⟦M2⟧", "```text\n⟦M1⟧\n```"} {
 		got := Build(md, Options{})
