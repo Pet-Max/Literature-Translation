@@ -2,6 +2,6 @@
 // 取用，CLI 横幅直接引用——改版本只改这一处。
 package version
 
-const Version = "v1.2.2"
+const Version = "v1.2.3"
 
 func Display() string { return Version }

@@ -67,8 +67,10 @@ body{
 :root[data-theme="light"] .theme-btn .ic-sun{display:block}
 :root[data-theme="light"] .theme-btn .ic-moon{display:none}
 .wc-min{position:absolute;inset:0;margin:auto;width:11px;height:11px;border-bottom:1.5px solid var(--ink-2)}
-/* 最大化/还原图标：SVG 双态，restore 类挂在按钮上切换 */
-.win-controls .wc-ic{width:11px;height:11px;display:block}
+/* 最大化/还原图标：SVG 双态，restore 类挂在按钮上切换。
+   块级子元素不吃按钮 text-align:center（同主题按钮太阳图标的偏左 bug），
+   margin:0 auto 显式水平居中 */
+.win-controls .wc-ic{width:11px;height:11px;display:block;margin:0 auto}
 #win-max .ic-restore{display:none}
 #win-max.restore .ic-max{display:none}
 #win-max.restore .ic-restore{display:block}
