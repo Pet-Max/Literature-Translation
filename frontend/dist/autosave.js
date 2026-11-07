@@ -278,6 +278,22 @@ function bindAutosave() {
     } else el.addEventListener("change", () => update(true));
   }
   $("g-add").addEventListener("click", () => { CFG.glossary.push({en:"",zh:""}); renderGlossary(); saveGlossary(); });
+  // 恢复默认：后端已落盘，本地同步状态并挂撤销（误操作可一键还原自定义术语）
+  $("g-reset").addEventListener("click", async () => {
+    // 只统计两端填全的行（与后端下发引擎的过滤一致），空行视为草稿不计入
+    const n = (CFG.glossary || []).filter((g) => g.en.trim() && g.zh.trim()).length;
+    if ((await showModal({icon:"warn", title:"恢复默认术语表？", body:`将清除当前 ${n} 条术语，还原为默认示例。术语表变化会使任务指纹改变，进行中任务的断点随之失效。`, buttons:[{label:"取消",kind:"ghost"},{label:"恢复默认",kind:"danger"}]})) !== 1) return;
+    const prev = copySettings(CFG.glossary);
+    try {
+      const saved = await App.ResetGlossaryToDefault();
+      CFG.glossary_rows = copySettings(saved.glossary_rows ?? saved.glossary);
+      CFG.glossary = copySettings(CFG.glossary_rows);
+      renderGlossary(); saveGlossary();
+      showSettingsUndo("glossary", () => { CFG.glossary = prev; renderGlossary(); saveGlossary(); });
+    } catch (e) {
+      showModal({icon:"warn", title:"无法恢复默认", body:esc(String(e))});
+    }
+  });
   rt.EventsOn("settings:before-close", closeWithSettings);
 }
 function saveGlossary(delay = 0) { queueSettings("glossary", {glossary_rows: CFG.glossary}, delay); }

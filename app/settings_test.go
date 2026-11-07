@@ -325,7 +325,7 @@ func TestMinerUResponseMatrix(t *testing.T) {
 		status     int
 		body, want string
 	}{
-		{200, `{"code":-60012}`, "info"}, {200, `{"code":0}`, "info"}, {200, `{"code":[200,0]}`, "info"},
+		{200, `{"code":-60012}`, "ok"}, {200, `{"code":0}`, "ok"}, {200, `{"code":[200,0]}`, "ok"},
 		{401, `{}`, "error"}, {403, `{}`, "error"}, {200, `{"msgCode":"A0202"}`, "error"}, {401, `{"msgCode":"A0211"}`, "error"},
 		{429, `{}`, "error"}, {503, `{}`, "error"}, {200, `{}`, "warning"}, {200, `null`, "warning"}, {200, `{"code":null}`, "warning"},
 		{200, `{"code":0,"success":false}`, "warning"}, {200, `<html>`, "warning"}, {200, `{"code":123}`, "warning"},
@@ -344,8 +344,8 @@ func TestMinerUProbeMessages(t *testing.T) {
 		status     int
 		body, want string
 	}{
-		{200, `{"code":-60012}`, "服务已响应，解析功能待验证"},
-		{200, `{"code":0}`, "服务已响应，解析功能待验证"},
+		{200, `{"code":-60012}`, "Token 有效，服务连通 · 解析功能待验证"},
+		{200, `{"code":0}`, "Token 有效，服务连通 · 解析功能待验证"},
 		{401, `{}`, "Token 认证失败，请检查凭据或账号权限"},
 		{200, `{"msgCode":"A0202"}`, "Token 认证失败，请检查凭据或账号权限"},
 		{401, `{"msgCode":"A0211"}`, "Token 已过期，请更新"},
@@ -369,12 +369,48 @@ func TestMinerUProbeStatuses(t *testing.T) {
 			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"code":-60012}`))}, nil
 		})}
 		r := a.TestMinerUWithConfig("demo-token")
-		if status == 200 && (r.Status != "info" || r.Message != "服务已响应，解析功能待验证") {
-			t.Fatal("informational probe reported as failure", r)
+		if status == 200 && (r.Status != "ok" || r.Message != "Token 有效，服务连通 · 解析功能待验证") {
+			t.Fatal("successful probe not reported as ok", r)
 		}
 		if status == 401 && r.Status != "error" {
 			t.Fatal("probe accepted authentication rejection", r)
 		}
+	}
+}
+
+func TestResetGlossaryToDefault(t *testing.T) {
+	a := settingsApp(t)
+	def := a.DefaultGlossary()
+	if len(def) != 1 || def[0].En != "Schrödinger equation" || def[0].Zh != "薛定谔方程" {
+		t.Fatal("unexpected factory glossary", def)
+	}
+	p := patchJSON(t, `{"glossary_rows":[{"en":"custom-a","zh":"自定义甲"},{"en":"custom-b","zh":"自定义乙"}]}`)
+	if _, err := a.UpdateSettings(p); err != nil {
+		t.Fatal(err)
+	}
+	if c := a.GetConfig(); len(*c.GlossaryRows) != 2 {
+		t.Fatal("custom rows not applied")
+	}
+	c, err := a.ResetGlossaryToDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*c.GlossaryRows) != 1 || (*c.GlossaryRows)[0] != def[0] || len(c.Glossary) != 1 {
+		t.Fatal("reset did not restore factory glossary", *c.GlossaryRows)
+	}
+	if c = a.GetConfig(); len(*c.GlossaryRows) != 1 || (*c.GlossaryRows)[0] != def[0] || len(c.Glossary) != 1 {
+		t.Fatal("reset not persisted to config", *c.GlossaryRows)
+	}
+	data, err := os.ReadFile(filepath.Join(os.Getenv("APPDATA"), config.DataDirName, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var disk config.Config
+	if err := json.Unmarshal(data, &disk); err != nil {
+		t.Fatal(err)
+	}
+	if len(*disk.GlossaryRows) != 1 || (*disk.GlossaryRows)[0] != def[0] {
+		t.Fatal("reset not persisted to disk")
 	}
 }
 

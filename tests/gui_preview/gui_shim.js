@@ -68,7 +68,7 @@ const MOCK_CFG = {
     user_global: "",
   },
   glossary: [
-    { en: "Langevin equation", zh: "朗之万方程" },
+    { en: "Schrödinger equation", zh: "薛定谔方程" },
   ],
   export: { bilingual: false, toc: false, two_column: false, user_font: "", output_dir: "" },
   translate: { skip_references: true },
@@ -127,10 +127,12 @@ const mockApp = {
     return {status:"ok",message:"模型列表接口连通 · 15 个模型",model_count:15};
   },
   TestMinerUWithConfig: async token => {
-    const result=cloneMock(mockState.mineruResult || {status:"info",message:"服务已响应，解析功能待验证"});
+    const result=cloneMock(mockState.mineruResult || {status:"ok",message:"Token 有效，服务连通 · 解析功能待验证"});
     mockState.calls.push({method:"mineru",token}); await waitMock();
     return result;
   },
+  DefaultGlossary: async () => cloneMock([{en:"Schrödinger equation",zh:"薛定谔方程"}]),
+  ResetGlossaryToDefault: async () => mockApp.UpdateSettings({glossary_rows:[{en:"Schrödinger equation",zh:"薛定谔方程"}]}),
   FetchModelsWithConfig: async (url,key) => {
     const models=cloneMock(mockState.models || ["glm-4.6","glm-5.3-flash","glm-5.3","deepseek-v3"]);
     mockState.calls.push({method:"models",url,key}); await waitMock(); return models;

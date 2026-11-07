@@ -284,6 +284,8 @@ select.in option{background:var(--panel);color:var(--ink)}
   font-size:11px;line-height:1;background:transparent;color:var(--ink-3);
   transition:color .15s ease,background .15s ease,transform .15s ease;
 }
+/* 空闲态心电图：颜色跟随按钮 currentColor（idle 灰 + .75 透明度），结果态不渲染 SVG */
+.conn-dot .ecg{display:block;width:15px;height:15px;overflow:visible;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .conn-dot:hover{background:var(--hover-1)}
 .conn-dot:active{transform:translateY(-50%) scale(.9)}
 .conn-dot.idle{opacity:.75}

@@ -47,6 +47,7 @@ func (a *App) TestMinerUWithConfig(token string) ConnectionResult {
 	return classifyMinerU(resp.StatusCode, body)
 }
 
+// conn-test 探针只验证认证与连通，不提交真实解析任务；成功态文案保留"待验证"限定。
 func classifyMinerU(status int, body []byte) ConnectionResult {
 	result := func(s, m string) ConnectionResult { return ConnectionResult{Status: s, Message: m} }
 	var p struct {
@@ -75,14 +76,14 @@ func classifyMinerU(status int, body []byte) ConnectionResult {
 	}
 	var code int
 	if json.Unmarshal(p.Code, &code) == nil && string(p.Code) != "null" && code == -60012 {
-		return result("info", "服务已响应，解析功能待验证")
+		return result("ok", "Token 有效，服务连通 · 解析功能待验证")
 	}
 	bad, ok := parseConnTestCode(p.Code)
 	if bad {
 		return result("error", "Token 认证失败，请检查凭据或账号权限")
 	}
 	if ok && (p.Success == nil || *p.Success) && p.MsgCode == "" {
-		return result("info", "服务已响应，解析功能待验证")
+		return result("ok", "Token 有效，服务连通 · 解析功能待验证")
 	}
 	return result("warning", "已收到响应，暂时无法确认服务状态")
 }

@@ -87,6 +87,15 @@ func (a *App) updateConfigWithRollback(edit func(*config.Config) error, rollback
 	return next.Clone(), nil
 }
 
+// DefaultGlossary 返回出厂示例术语，供「恢复默认」按钮的置灰判断。
+func (a *App) DefaultGlossary() []config.Term { return config.Default().Glossary }
+
+// ResetGlossaryToDefault 将术语表整体还原为出厂示例，复用术语行保存通道。
+func (a *App) ResetGlossaryToDefault() (*config.Config, error) {
+	rows := config.Default().Glossary
+	return a.UpdateSettings(SettingsPatch{GlossaryRows: &rows})
+}
+
 func (a *App) UpdateSettings(patch SettingsPatch) (*config.Config, error) {
 	return a.updateConfig(func(c *config.Config) error {
 		// Marshal the typed patch so false and empty strings survive, while absent leaves do not.

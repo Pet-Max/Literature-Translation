@@ -477,6 +477,13 @@ function renderGlossary() {
   $("glossary-box").innerHTML =
     `<div class="g-row head"><span>原文术语</span><span>统一译名</span><span></span></div>` + rows;
   bindGlossary();
+  // 恢复默认按钮：与出厂示例完全一致时置灰，防「点了没变化」的错觉
+  App.DefaultGlossary().then((def) => {
+    const cur = CFG.glossary || [];
+    const same = cur.length === def.length && def.every((d, i) => cur[i] && cur[i].en === d.en && cur[i].zh === d.zh);
+    const btn = $("g-reset");
+    if (btn) { btn.disabled = same; btn.title = same ? "当前已是默认术语表" : "清除全部术语，还原为出厂示例"; }
+  }).catch(() => {});
 }
 
 function bindGlossary() {
@@ -998,6 +1005,8 @@ function showModal(opt) {
   });
 }
 
+// 空闲态图标：心电图（存活检测隐喻）；结果态沿用 ◌/✓/ⓘ/!/✕ 字形与配色
+const ECG_ICON = '<svg class="ecg" viewBox="0 0 20 20" aria-hidden="true"><path d="M1.5 10H5.9L7.5 6.4L10.1 13.9L11.7 10H18.5"/></svg>';
 // Tests always use current inputs and ignore responses for superseded inputs.
 function bindConnTests() {
   document.querySelectorAll(".conn-dot").forEach((dot) => {
@@ -1010,7 +1019,7 @@ function bindConnTests() {
     wrap.replaceWith(host); host.append(wrap, message);
     const set = (cls, label = "测试连接") => {
       dot.className = "conn-dot " + cls;
-      dot.textContent = cls === "spin" ? "◌" : cls === "ok" ? "✓" : cls === "info" ? "ⓘ" : cls === "bad" ? "✕" : cls === "warning" ? "!" : "⇄";
+      dot.innerHTML = cls === "idle" ? ECG_ICON : cls === "spin" ? "◌" : cls === "ok" ? "✓" : cls === "info" ? "ⓘ" : cls === "bad" ? "✕" : "!";
       dot.title = label; dot.setAttribute("aria-label", label);
       message.textContent = cls === "idle" ? "" : label;
     };
@@ -1164,9 +1173,12 @@ function bindFetchModels() {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && open) closePop(); });
 }
 
-// 主题：默认深色（dark），浅色存 localStorage；切换平滑过渡
+// 主题：默认浅色（light），选择存 localStorage；切换平滑过渡
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
+  const tip = t === "light" ? "切换为深色" : "切换为浅色";
+  $("btn-theme").title = tip;
+  $("btn-theme").setAttribute("aria-label", tip);
   try { localStorage.setItem("literature-theme", t); } catch (e) { /* 忽略 */ }
 }
 function bindTheme() {

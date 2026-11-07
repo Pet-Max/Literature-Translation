@@ -49,7 +49,7 @@ const browser = await pw.chromium.launch({
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 const pageErrors = [];
 page.on("pageerror", (e) => pageErrors.push(String(e)));
-// 每次导航前清空主题存档，保证首屏是默认深色
+// 每次导航前清空主题存档，保证首屏是默认浅色
 await page.addInitScript(() => { try { localStorage.clear(); } catch {} });
 
 const PAGE_URL = `http://127.0.0.1:${PREVIEW_PORT}/index.html`;
@@ -81,15 +81,19 @@ console.log("\n[2] 双主题");
   const lightBg = await page.locator("body").evaluate((el) => getComputedStyle(el).backgroundColor);
   ok("浅色背景 rgb(245,245,247)（默认）", lightBg === "rgb(245, 245, 247)", lightBg);
   ok("data-theme=light", (await page.locator("html").getAttribute("data-theme")) === "light");
+  ok("浅色悬停提示·切换为深色", (await page.locator("#btn-theme").getAttribute("title")) === "切换为深色");
   await page.click("#btn-theme");
   await until(() => page.locator("body").evaluate((el) => getComputedStyle(el).backgroundColor).then((c) => c === "rgb(12, 14, 19)"));
   const darkBg = await page.locator("body").evaluate((el) => getComputedStyle(el).backgroundColor);
   ok("深色背景 rgb(12,14,19)", darkBg === "rgb(12, 14, 19)", darkBg);
   ok("主题持久化", (await page.evaluate(() => localStorage.getItem("literature-theme"))) === "dark");
+  ok("深色悬停提示·切换为浅色", (await page.locator("#btn-theme").getAttribute("title")) === "切换为浅色"
+    && (await page.locator("#btn-theme").getAttribute("aria-label")) === "切换为浅色");
   const sideBg = await page.locator(".sidebar").evaluate((el) => getComputedStyle(el).backgroundColor);
   ok("侧栏与主区背景区分", sideBg !== darkBg, `sidebar=${sideBg} body=${darkBg}`);
   await page.click("#btn-theme"); // 切回浅色，后续断言基线一致
   await until(() => page.locator("html").getAttribute("data-theme").then((t) => t === "light"));
+  ok("切回浅色提示还原", (await page.locator("#btn-theme").getAttribute("title")) === "切换为深色");
 }
 
 // ============ [3] 设置视图 ============
@@ -115,7 +119,8 @@ console.log("\n[3] 设置视图");
   // 输入改动 → 状态重置空闲
   await page.fill("#cfg-llm-url", "https://example.com/v1");
   await until(() => page.locator('.conn-dot[data-conn="llm"]').getAttribute("class").then((c) => c.includes("idle")));
-  ok("输入改动重置连接状态", (await page.locator('.conn-dot[data-conn="llm"]').textContent()) === "⇄");
+  ok("输入改动重置连接状态", (await page.locator('.conn-dot[data-conn="llm"]').getAttribute("class")).includes("idle")
+    && (await page.locator('.conn-dot[data-conn="llm"] svg.ecg').count()) === 1);
 
   // 拉取模型弹层
   await page.click("#btn-fetch-models");
@@ -173,7 +178,7 @@ console.log("\n[5] 自绘弹窗");
   await until(() => page.locator("#modal-scrim").evaluate((el) => !el.hidden));
   ok("弹窗出现", await page.locator("#modal-scrim").isVisible());
   ok("弹窗标题", (await page.locator("#modal-title").textContent()) === "删除这条术语？");
-  ok("弹窗正文含术语", (await page.locator("#modal-body").textContent()).includes("Langevin equation"));
+  ok("弹窗正文含术语", (await page.locator("#modal-body").textContent()).includes("Schrödinger equation"));
   ok("按钮为 取消/删除", (await page.locator("#modal-btns .btn").allTextContents()).join("/") === "取消/删除");
 
   await page.keyboard.press("Escape");
@@ -187,6 +192,28 @@ console.log("\n[5] 自绘弹窗");
   await until(() => rows().then((n) => n === 0));
   ok("确认删除后行数 0", (await rows()) === 0);
   ok("删除后弹窗关闭", await page.locator("#modal-scrim").isHidden());
+
+  // 恢复默认：空表 → 确认 → 回到出厂示例，且按钮置灰
+  ok("恢复默认按钮存在", (await page.locator("#g-reset").count()) === 1);
+  await page.click("#g-reset");
+  await until(() => page.locator("#modal-scrim").evaluate((el) => !el.hidden));
+  ok("恢复弹窗标题", (await page.locator("#modal-title").textContent()) === "恢复默认术语表？");
+  ok("恢复弹窗含断点提示", (await page.locator("#modal-body").textContent()).includes("断点随之失效"));
+  await page.locator('#modal-btns .btn.danger').click();
+  await until(() => rows().then((n) => n === 1));
+  ok("恢复后回到出厂示例", (await page.locator('#glossary-box input[data-gi="0"][data-gk="en"]').inputValue()) === "Schrödinger equation");
+  await until(() => page.locator("#g-reset").isDisabled());
+  ok("默认状态按钮置灰", await page.locator("#g-reset").isDisabled());
+
+  // 空行不计入术语数：默认 1 条 + 1 空行 → 弹窗按 1 条告知，确认后空行一并清除
+  await page.click("#g-add");
+  await until(() => rows().then((n) => n === 2));
+  await page.click("#g-reset");
+  await until(() => page.locator("#modal-scrim").evaluate((el) => !el.hidden));
+  ok("空行不计入术语数", (await page.locator("#modal-body").textContent()).includes("1 条术语"));
+  await page.locator('#modal-btns .btn.danger').click();
+  await until(() => rows().then((n) => n === 1));
+  ok("确认后空行随重置清除", (await rows()) === 1);
 }
 
 // ============ [6] 公式预览（KaTeX 幂等） ============
@@ -290,8 +317,8 @@ console.log("\n[10] 设置持久化与时序回归");
   await p.click('.nav-item[data-view="settings"]');
   await p.fill("#cfg-mineru-token","CURRENT-TOKEN");
   await p.click('.conn-dot[data-conn="mineru"]');
-  await until(()=>p.locator('.conn-dot[data-conn="mineru"]').getAttribute("class").then(t=>t.includes("info")));
-  ok("MinerU 使用当前输入且准确说明验证范围", await p.evaluate(()=>window.__settingsMock.calls.some(c=>c.method==="mineru" && c.token==="CURRENT-TOKEN")) && (await p.locator(".conn-message").first().textContent())==="服务已响应，解析功能待验证");
+  await until(()=>p.locator('.conn-dot[data-conn="mineru"]').getAttribute("class").then(t=>t.includes("ok")));
+  ok("MinerU 使用当前输入且准确说明验证范围", await p.evaluate(()=>window.__settingsMock.calls.some(c=>c.method==="mineru" && c.token==="CURRENT-TOKEN")) && (await p.locator(".conn-message").first().textContent())==="Token 有效，服务连通 · 解析功能待验证");
   await p.evaluate(()=>window.__settingsMock.delay=180);
   await p.fill("#cfg-llm-key","KEY-BEFORE");
   await p.click('.conn-dot[data-conn="llm"]');
@@ -596,7 +623,7 @@ console.log("\n[12] 输出卡片右上角保存反馈");
   await p.close();
 }
 
-// ============ [13] MinerU 探测文案与信息状态 ============
+// ============ [13] MinerU 探测结果与连通状态 ============
 console.log("\n[13] MinerU 检测结果表达");
 {
   const p=await browser.newPage({viewport:{width:1040,height:800}});
@@ -605,13 +632,20 @@ console.log("\n[13] MinerU 检测结果表达");
   await p.click('.nav-item[data-view="settings"]');
   const dot=p.locator('.conn-dot[data-conn="mineru"]');
   const message=p.locator('.conn-message').first();
-  await dot.click();await until(()=>message.textContent().then(t=>t==="服务已响应，解析功能待验证"));
-  ok("MinerU 已响应显示信息图标",(await dot.getAttribute("class")).includes("info") && (await dot.textContent())==="ⓘ");
-  const blue=await until(()=>dot.evaluate(el=>getComputedStyle(el).color===getComputedStyle(document.querySelector(".nav-item.active")).backgroundColor));
-  ok("MinerU 信息图标使用蓝色强调色",blue===true);
-  ok("探测结果不显示验证通过的绿色勾",!(await dot.getAttribute("class")).includes("ok") && (await dot.textContent())!=="✓");
-  ok("辅助技术能读取新的验证范围提示",await dot.getAttribute("aria-label")==="服务已响应，解析功能待验证" && await message.getAttribute("role")==="status");
-  ok("已响应结果记录为信息而非警告",await p.evaluate(()=>logLines.some(l=>l.level==="info" && l.msg==="MinerU：服务已响应，解析功能待验证") && !logLines.some(l=>l.level==="warn" && l.msg==="MinerU：服务已响应，解析功能待验证")));
+  await dot.click();await until(()=>message.textContent().then(t=>t==="Token 有效，服务连通 · 解析功能待验证"));
+  ok("MinerU 连通显示绿色对勾",(await dot.getAttribute("class")).includes("ok") && (await dot.textContent())==="✓");
+  const green=await until(()=>dot.evaluate(el=>{
+    const probe=document.createElement("span");
+    probe.style.color="var(--ok)";
+    document.body.append(probe);
+    const want=getComputedStyle(probe).color;
+    probe.remove();
+    return getComputedStyle(el).color===want;
+  }));
+  ok("MinerU 连通图标使用成功绿",green===true);
+  ok("探测成功不再使用信息提示图标",!(await dot.getAttribute("class")).includes("info") && (await dot.textContent())!=="ⓘ");
+  ok("辅助技术能读取验证范围提示",await dot.getAttribute("aria-label")==="Token 有效，服务连通 · 解析功能待验证" && await message.getAttribute("role")==="status");
+  ok("连通结果记录为信息级日志而非警告",await p.evaluate(()=>logLines.some(l=>l.level==="info" && l.msg==="MinerU：Token 有效，服务连通 · 解析功能待验证") && !logLines.some(l=>l.level==="warn" && l.msg==="MinerU：Token 有效，服务连通 · 解析功能待验证")));
   await p.evaluate(()=>applyTheme("light"));await p.waitForTimeout(200);
   await p.locator('.set-card[data-section="service"]').screenshot({path:"output/playwright/settings-mineru-status-v5.png"});
   for(const result of [

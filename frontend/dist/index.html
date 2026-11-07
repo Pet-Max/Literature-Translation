@@ -27,7 +27,7 @@
     <span class="brand-name">Literature Translation</span>
   </div>
   <div class="win-controls">
-    <button id="btn-theme" class="theme-btn" aria-label="切换浅色/深色主题" title="切换浅色 / 深色">
+    <button id="btn-theme" class="theme-btn" aria-label="切换为深色" title="切换为深色">
       <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5Z"/></svg>
       <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>
     </button>
@@ -93,7 +93,7 @@
     <!-- ============ 视图：设置 ============ -->
     <section class="view" id="view-settings">
       <div class="view-title">设置</div>
-      <div class="view-desc">设置自动保存，对后续启动的任务生效；凭据保存在本机。</div>
+      <div class="view-desc">设置改动自动保存，对后续启动的任务生效；凭据仅保存在本机。</div>
 
       <div class="set-card" id="config-recovery" role="alert" hidden>
         <h3>配置需要恢复</h3>
@@ -106,14 +106,14 @@
       </div>
       <div class="set-card" data-section="service">
         <h3>服务连接</h3>
-        <div class="card-hint">MinerU 解析与翻译模型凭据 · <a class="mini-link" id="mineru-link" href="https://mineru.net/apiManage/token">前往 API 管理 ↗</a></div>
+        <div class="card-hint">MinerU 解析与翻译模型的凭据和参数 · 凭据旁的小图标可测试连通 · <a class="mini-link" id="mineru-link" href="https://mineru.net/apiManage/token">前往 API 管理 ↗</a></div>
         <div class="fgrid">
-          <label>API Token</label><div class="conn-wrap"><input class="in mono" type="password" id="cfg-mineru-token" placeholder="mineru.net「API 管理」页生成"><button class="conn-dot idle" data-conn="mineru" title="测试连接" aria-label="测试 MinerU 连接">⇄</button></div>
+          <label>API Token</label><div class="conn-wrap"><input class="in mono" type="password" id="cfg-mineru-token" placeholder="mineru.net「API 管理」页生成"><button class="conn-dot idle" data-conn="mineru" title="测试连接" aria-label="测试 MinerU 连接"><svg class="ecg" viewBox="0 0 20 20" aria-hidden="true"><path d="M1.5 10H5.9L7.5 6.4L10.1 13.9L11.7 10H18.5"/></svg></button></div>
           <label>解析模式</label><div><select class="in" id="cfg-mineru-mode" style="max-width:260px">
             <option value="vlm">精准解析（VLM，公式表格更准）</option>
             <option value="pipeline">快速解析（pipeline，文本层优先）</option>
           </select></div>
-          <label>模型 API 地址</label><div class="conn-wrap"><input class="in mono" id="cfg-llm-url" placeholder="https://api.deepseek.com"><button class="conn-dot idle" data-conn="llm" title="测试连接" aria-label="测试 LLM 连接">⇄</button></div>
+          <label>模型 API 地址</label><div class="conn-wrap"><input class="in mono" id="cfg-llm-url" placeholder="https://api.deepseek.com"><button class="conn-dot idle" data-conn="llm" title="测试连接" aria-label="测试 LLM 连接"><svg class="ecg" viewBox="0 0 20 20" aria-hidden="true"><path d="M1.5 10H5.9L7.5 6.4L10.1 13.9L11.7 10H18.5"/></svg></button></div>
           <label>API Key</label><input class="in mono" type="password" id="cfg-llm-key" placeholder="sk-...">
           <label>模型名</label><div class="inline-btns" style="position:relative">
             <input class="in mono" id="cfg-llm-model" style="max-width:230px" placeholder="deepseek-flash">
@@ -129,21 +129,22 @@
 
       <div class="set-card" data-section="rules">
         <h3>翻译规则</h3>
-        <div class="card-hint">正文自动保存为草稿 · 应用后对后续启动的任务生效</div>
+        <div class="card-hint">发给模型的翻译要求，可建多套预设切换 · 编辑自动存草稿，应用后对后续启动的任务生效</div>
         <div class="rule-list" id="rule-list"></div>
         <button class="btn ghost-sm" id="btn-rule-add" style="margin-top:10px">＋ 新建预设</button>
       </div>
 
       <div class="set-card" data-section="glossary">
         <h3>术语表</h3>
-        <div class="card-hint">附在每段的翻译指令中</div>
+        <div class="card-hint">原文术语 → 统一译名 · 随每段翻译指令下发，保证全篇译名一致</div>
         <div class="glossary" id="glossary-box"></div>
         <button class="btn ghost-sm g-add" id="g-add" style="margin-top:10px">＋ 添加术语</button>
+        <button class="btn ghost-sm" id="g-reset" style="margin-top:10px;margin-left:8px" title="清除全部术语，还原为出厂示例">恢复默认</button>
       </div>
 
       <div class="set-card" data-section="layout">
         <h3>排版选项</h3>
-        <div class="card-hint">中文 PDF 的版面</div>
+        <div class="card-hint">译文版面样式与解析损伤修复的开关</div>
         <div class="toggle-row">
           <span class="switch"><input type="checkbox" id="cfg-bilingual"><i></i></span>
           <span class="t-name">双语对照</span><span class="t-desc">译文段落后附原文段落</span>
@@ -172,7 +173,7 @@
 
       <div class="set-card" data-section="output">
         <h3>输出</h3>
-        <div class="card-hint">成品 PDF 的字体与归档位置</div>
+        <div class="card-hint">译文 PDF 的正文字体（下方预览）与归档目录</div>
         <div class="fgrid">
           <label>正文字体</label><div class="inline-btns">
             <select class="in" id="cfg-font" style="max-width:240px"></select>
@@ -189,7 +190,7 @@
 
       <div class="set-card">
         <h3>关于与更新</h3>
-        <div class="card-hint">手动检查 GitHub 最新版本；更新请前往 Release 页下载安装包，应用内不做自动更新</div>
+        <div class="card-hint">手动检查 GitHub 新版本 · 应用内不自动更新，安装包请到 Release 页下载</div>
         <div class="about-row">
           <span class="about-ver"><span class="about-ver-label">当前版本</span><span class="about-ver-num" id="about-version">—</span></span>
           <span class="about-status" id="about-status" aria-live="polite" hidden></span>
