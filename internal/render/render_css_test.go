@@ -1,4 +1,4 @@
-// render_css_test.go — 公式横线减细 CSS（v1.2.0 顺带项）必须随 Build 输出。
+// render_css_test.go — 公式横线减细 CSS 必须随 Build 输出。
 package render
 
 import (

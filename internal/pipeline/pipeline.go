@@ -100,11 +100,11 @@ func (p *Pipeline) Check() error {
 		return fmt.Errorf("引擎自检失败: %v", err)
 	}
 	p.logf("引擎: OK（内置 Go 引擎）")
-	edge, err := export.FindEdge()
+	browser, err := export.FindBrowser()
 	if err != nil {
 		return err
 	}
-	p.logf("Edge: %s", edge)
+	p.logf("Edge/Chrome: %s", browser)
 	p.logf("✓ 预检完成")
 	return nil
 }

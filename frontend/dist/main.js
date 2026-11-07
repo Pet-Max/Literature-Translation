@@ -861,6 +861,42 @@ function bindLog() {
       renderLog();
     });
   });
+  let copyResetTimer = 0;
+  const ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  $("btn-copy-log").innerHTML = ICON_COPY; // 图标单源：HTML 静态副本已移除，此处注入
+  const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>';
+  const ICON_FAIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  $("btn-copy-log").addEventListener("click", async () => {
+    const text = logLines
+      .filter((l) => logFilter === "all" || l.level === logFilter)
+      .map((l) => `${l.time} ${l.level.toUpperCase().padEnd(5)} ${l.msg}`)
+      .join("\n");
+    if (!text) return;
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch {
+      // WebView2 剪贴板权限兜底：隐藏选区 + execCommand
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      ok = document.execCommand("copy");
+      ta.remove();
+    }
+    const btn = $("btn-copy-log");
+    btn.innerHTML = ok ? ICON_CHECK : ICON_FAIL;
+    btn.classList.toggle("log-copy-done", ok);
+    btn.classList.toggle("log-copy-fail", !ok);
+    clearTimeout(copyResetTimer);
+    copyResetTimer = setTimeout(() => {
+      btn.innerHTML = ICON_COPY;
+      btn.classList.remove("log-copy-done", "log-copy-fail");
+    }, 1500);
+  });
   $("btn-clear-log").addEventListener("click", async () => {
     try {
       await App.ClearLog();
@@ -893,7 +929,8 @@ function appendLogLine(line) {
   if (!panel) return;
   const div = document.createElement("div");
   div.dataset.lv = line.level;
-  div.innerHTML = `<span class="t">${esc(line.time)}</span><span class="lv lv-${esc(line.level)}">${esc(line.level)}</span>${esc(line.msg)}`;
+  // 尾随空格：CSS margin 不进复制文本，选中复制时需要真实分隔
+  div.innerHTML = `<span class="t">${esc(line.time)} </span><span class="lv lv-${esc(line.level)}">${esc(line.level)} </span>${esc(line.msg)}`;
   panel.appendChild(div);
   panel.scrollTop = panel.scrollHeight;
   if (panel.children.length > 500) panel.removeChild(panel.firstChild);

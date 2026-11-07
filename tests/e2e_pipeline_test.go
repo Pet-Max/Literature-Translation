@@ -49,8 +49,8 @@ func TestE2ETranslateMDArchive(t *testing.T) {
 	if testing.Short() {
 		t.Skip("集成测试，-short 跳过")
 	}
-	if _, err := export.FindEdge(); err != nil {
-		t.Skip("本机没有 Edge，跳过管线集成测试")
+	if _, err := export.FindBrowser(); err != nil {
+		t.Skip("本机没有 Edge/Chrome，跳过管线集成测试")
 	}
 
 	// ---- mock LLM：回显 user 内容 + 追加中文标记句 ----

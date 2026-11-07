@@ -78,7 +78,7 @@ func (a *App) Startup(ctx context.Context) {
 	go func() { defer close(a.workerDone); a.queue.Worker(a.queueCtx) }()
 }
 
-// cleanupLegacyWebviewData 一次性清理 v1.0.1 及以前 WebView2 默认数据目录
+// cleanupLegacyWebviewData 一次性清理早期版本遗留的 WebView2 默认数据目录
 // （纯内核缓存，无用户数据）。仅在新目录生效时才清——防止把回退目标删掉；
 // 目录被其他实例占用时删除失败静默跳过，下次启动再试。
 func (a *App) cleanupLegacyWebviewData() {

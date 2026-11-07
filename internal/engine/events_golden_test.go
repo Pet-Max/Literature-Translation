@@ -1,10 +1,9 @@
-// events_golden_test.go — 历史进度事件与任务指纹兼容性回归
-// （engine.py op_translate），在相同 mock LLM、相同输入、concurrency=1
-// 下的进度事件流与最终结果逐字段一致；任务指纹 BuildCacheKey 与
-// Python chunk_hash(json.dumps(..., sort_keys=True)) 逐字节一致。
+// events_golden_test.go — 历史进度事件与任务指纹兼容性回归：
+// 在相同 mock LLM、相同输入、concurrency=1 下，进度事件流与最终结果
+// 须与历史基线实现逐字段一致；任务指纹 BuildCacheKey 与历史哈希
+// 算法逐字节一致（旧归档进度文件因此继续可用）。
 //
-// 黄金文件由 _v1.2.0_baseline/gen_events_golden.py 生成（驱动真实
-// engine.py 子进程录制）。事件比较忽略键序与 "event":"progress" 包装。
+// 黄金文件为基线实现的录制产物。事件比较忽略键序与 "event":"progress" 包装。
 package engine
 
 import (
@@ -42,7 +41,7 @@ func TestTranslateEventStreamGolden(t *testing.T) {
 				} `json:"result"`
 			} `json:"final"`
 			// FailSub 不在黄金里——两种场景的 mock 行为写死在本测试，
-			// 与 gen_events_golden.py 保持一致：all_pass 回显+标记；
+			// 与黄金录制场景的约定保持一致：all_pass 回显+标记；
 			// mid_fail 对含 ZZFAILZZ 的段回「拒答占位符全丢」。
 		} `json:"cases"`
 		CacheKeys map[string]any `json:"cache_keys"`

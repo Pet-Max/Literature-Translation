@@ -1,5 +1,5 @@
 // render_supsub_test.go — 上下标白名单通道：<sup>/<sub> 必须原样排版进
-// 导出 HTML。v1.2.1 及以前 goldmark 默认剥离原始 HTML，"Abah,<sup>2</sup>"
+// 导出 HTML。早期版本中 goldmark 默认剥离原始 HTML，"Abah,<sup>2</sup>"
 // 打印成 "Abah,2"（真实案例：某论文的作者行与机构行）。
 package render
 

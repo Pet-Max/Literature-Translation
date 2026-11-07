@@ -81,7 +81,7 @@ type TranslateResult struct {
 	OutPath        string           `json:"out_path"`
 }
 
-// 参考文献甄别（engine.py make_reference_detector）。
+// 参考文献甄别：段首编号 + 序列递增 + 特征三重判定。
 var (
 	citeHeadRe       = regexp.MustCompile(`^\[(\d{1,3})\]\s`)
 	authorInitialsRe = regexp.MustCompile(`\b[A-Z]\. (\s*[A-Z]\. )+`)
@@ -138,11 +138,11 @@ func (d *refDetector) detect(chunk string) bool {
 	}
 	n, _ := strconv.Atoi(m[1])
 	if d.started {
-		if !(d.last < n && n <= d.last+3) {
+		if !(d.last < n && n <= d.last+refMaxGap) {
 			return false
 		}
 	}
-	if runeLen(chunk) > 800 {
+	if runeLen(chunk) > refMaxRunes {
 		return false
 	}
 	if authorInitialsRe.MatchString(chunk) || yearRe.MatchString(chunk) {
@@ -179,6 +179,13 @@ func TranslateContext(ctx context.Context, opts TranslateOptions) (*TranslateRes
 		if opts.OnEvent != nil {
 			opts.OnEvent(ev)
 		}
+	}
+
+	// 文献归位：MinerU 阅读序可能把分跨栏底的 [N] 条目插在正文中间，
+	// 翻译前聚拢到文末（refrelocate.go），保证逐条命中"保留原文"判定。
+	if relocated, moved := RelocateReferences(text); moved > 0 {
+		text = relocated
+		logf("文献归位：%d 条参考文献移位至文末", moved)
 	}
 
 	chunks := Split(text, DefaultMaxChars)

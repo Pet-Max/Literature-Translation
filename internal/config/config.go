@@ -231,7 +231,7 @@ func WebviewDataDir() string {
 	return filepath.Join(localAppData, DataDirName, "WebView2")
 }
 
-// LegacyWebviewDataDir 返回 v1.0.1 及以前 WebView2 默认数据目录
+// LegacyWebviewDataDir 返回早期版本遗留的 WebView2 默认数据目录
 // （%APPDATA%\Literature-Translation.exe），供启动时一次性清理（纯缓存）。
 func LegacyWebviewDataDir() string {
 	appData := os.Getenv("APPDATA")

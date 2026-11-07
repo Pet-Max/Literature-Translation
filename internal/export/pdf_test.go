@@ -21,7 +21,7 @@ func TestPrintUsesOneAdaptedPage(t *testing.T) {
 }
 
 func TestInvalidTeXIsNotExported(t *testing.T) {
-	if _, e := FindEdge(); e != nil {
+	if _, e := FindBrowser(); e != nil {
 		t.Skip("本机无 Edge，无法执行打印验证")
 	}
 	d := t.TempDir()

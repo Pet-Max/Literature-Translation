@@ -56,30 +56,39 @@ func (b *browserOutputBuf) Tail(n int) string {
 // DebugLog 非空时输出导出过程诊断信息（CLI 注入 logf）。
 var DebugLog func(string)
 
-// FindEdge 按顺序探测 Edge 安装路径。
-func FindEdge() (string, error) {
-	candidates := []string{
+// FindBrowser 按顺序探测可用于导出的浏览器路径：Edge 优先，Chrome 兜底
+// （chromedp 对二者同等驱动；精简系统常见"无 Edge 有 Chrome"）。
+// App Paths 注册表覆盖 HKLM 机器级与 HKCU 用户级安装。
+func FindBrowser() (string, error) {
+	for _, p := range []string{
 		`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
 		`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
-	}
-	for _, p := range candidates {
+		`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+		`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+	} {
 		if _, err := os.Stat(p); err == nil {
 			return p, nil
 		}
 	}
-	if out, err := exec.Command("reg", "query",
-		`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe`, "/ve").Output(); err == nil {
-		if i := strings.Index(string(out), "REG_SZ"); i >= 0 {
-			p := strings.TrimSpace(string(out[i+len("REG_SZ"):]))
-			p = strings.Trim(p, "\" \r\n")
-			if p != "" && strings.Contains(p, "msedge.exe") {
-				if _, err := os.Stat(p); err == nil {
-					return p, nil
+	for _, exe := range []string{`msedge.exe`, `chrome.exe`} {
+		for _, root := range []string{`HKLM\SOFTWARE`, `HKCU\SOFTWARE`} {
+			out, err := exec.Command("reg", "query",
+				root+`\Microsoft\Windows\CurrentVersion\App Paths\`+exe, "/ve").Output()
+			if err != nil {
+				continue
+			}
+			if i := strings.Index(string(out), "REG_SZ"); i >= 0 {
+				p := strings.TrimSpace(string(out[i+len("REG_SZ"):]))
+				p = strings.Trim(p, "\" \r\n")
+				if p != "" && strings.Contains(strings.ToLower(p), exe) {
+					if _, err := os.Stat(p); err == nil {
+						return p, nil
+					}
 				}
 			}
 		}
 	}
-	return "", errors.New("未找到 Microsoft Edge，无法导出 PDF（可安装 Edge 或改用 Chrome）")
+	return "", errors.New("未找到 Microsoft Edge 或 Chrome，无法导出 PDF（任装其一即可）")
 }
 
 // PrintPDF 把 htmlContent（排版好的 HTML）打印为 outPDF（绝对路径）。
@@ -87,7 +96,7 @@ func FindEdge() (string, error) {
 // userFontsDir 为用户导入字体目录（空串表示不挂载）。
 // workDir 作为 HTTP 根目录，供 HTML 里的图片相对路径引用。
 func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir string) (string, error) {
-	edge, err := FindEdge()
+	browser, err := FindBrowser()
 	if err != nil {
 		return "", err
 	}
@@ -139,9 +148,13 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 
 	var browserOutput browserOutputBuf
 	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath(edge),
+		chromedp.ExecPath(browser),
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
+		// Edge 157 起实测：stderr 走管道时被应用层全缓冲，DevTools 端点通告
+		//（chromedp 靠扫描它启动）延迟不刷出，导致 "chrome failed to start"；
+		// 此 flag 强制日志直写 stderr，恢复端点通告的即时可见。
+		chromedp.Flag("enable-logging", "stderr"),
 		chromedp.UserDataDir(profileDir),
 		chromedp.CombinedOutput(&browserOutput),
 	)

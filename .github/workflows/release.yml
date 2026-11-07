@@ -280,9 +280,11 @@ jobs:
           $expected = @("Literature-Translation-${env:TAG}-windows-amd64-portable.zip", "Literature-Translation-Setup-${env:TAG}-windows-amd64.exe")
           $files = @(Get-ChildItem -LiteralPath dist -File -Force)
           if ($files.Count -ne 2 -or @($files | Where-Object { $_.Name -cnotin $expected -or $_.Length -eq 0 }).Count -ne 0) { throw '发布产物不完整或包含其他批次文件' }
-          $files | Sort-Object Name |
-            ForEach-Object { '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower(), $_.Name } |
-            Set-Content -Encoding ascii dist/checksums.txt
+          # WriteAllText + [char]10：显式 LF 行尾（Set-Content 在 Windows 写 CRLF，
+          # Linux/macOS 用户 sha256sum -c 会因 \r 报错）
+          $l = $files | Sort-Object Name |
+            ForEach-Object { '{0}  {1}' -f (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLower(), $_.Name }
+          [IO.File]::WriteAllText((Join-Path (Get-Location) 'dist/checksums.txt'), ($l -join [char]10) + [char]10, [Text.Encoding]::ASCII)
           Get-Content dist/checksums.txt
 
       - name: Release notes + create + upload

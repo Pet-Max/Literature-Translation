@@ -11,10 +11,10 @@
 // 整体弃用旧进度重译，避免静默复用旧规则的译文。
 //
 // 兼容性与逐字节约定：
-//   - chunk_hash 输入串与输出（sha1 hex 前 12 位）与 v1.1.x 完全一致；
-//   - 写出行与 v1.1.x 断点文件逐字节一致（", "/": " 分隔符、键序、
+//   - chunk_hash 输入串与输出（sha1 hex 前 12 位）与历史断点格式完全一致；
+//   - 写出行与历史断点文件逐字节一致（", "/": " 分隔符、键序、
 //     不转义 HTML 字符），旧进度因此可继续复用；
-//   - v1.1.x 在 Windows 上以文本模式写 \r\n，读取端两种行尾都认；
+//   - 历史实现在 Windows 上以文本模式写 \r\n，读取端两种行尾都认；
 //     Go 端写入统一 \n。
 package engine
 
@@ -36,7 +36,7 @@ func ChunkHash(text string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
-// jsonString 按 v1.1.x 断点文件的转义约定编码单个字符串（不转义 <>&；
+// jsonString 按历史断点文件的转义约定编码单个字符串（不转义 <>&；
 // 已知差异：Go 无条件转义 U+2028/U+2029，且 \b/\f 用 \uXXXX 形式——
 // 学术 MD 文本中不会出现）。
 func jsonString(s string) string {

@@ -39,7 +39,9 @@ if not exist %ISCC% (
 if errorlevel 1 exit /b 1
 
 echo [5/5] checksums (SHA-256) ...
-powershell -NoProfile -Command "Get-FileHash -Algorithm SHA256 'build\bin\Literature-Translation-Setup-%VER%-windows-amd64.exe','build\bin\Literature-Translation-%VER%-windows-amd64-portable.zip' | ForEach-Object { '{0}  {1}' -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) } | Set-Content -Encoding ascii 'build\bin\checksums.txt'"
+rem MUST stay ASCII: WriteAllText + [char]10 forces LF endings (Set-Content
+rem writes CRLF on Windows, which breaks sha256sum -c on Linux/macOS)
+powershell -NoProfile -Command "$l = Get-FileHash -Algorithm SHA256 'build\bin\Literature-Translation-Setup-%VER%-windows-amd64.exe','build\bin\Literature-Translation-%VER%-windows-amd64-portable.zip' | ForEach-Object { '{0}  {1}' -f $_.Hash.ToLower(), (Split-Path $_.Path -Leaf) }; [IO.File]::WriteAllText('build\bin\checksums.txt', ($l -join [char]10) + [char]10, [Text.Encoding]::ASCII)"
 if errorlevel 1 exit /b 1
 
 echo.
