@@ -141,7 +141,7 @@ literature-translation font add|list|use|remove    # 字体管理
 
 - **改前端**：直接编辑 `frontend/dist/` 前端源码文件，无构建步骤；改完 `scripts\build.bat` 重新打包（前端经 embed 进 exe）
 - **打包分发**：`scripts\package.bat` 产出两种分发物到 `build\bin\`——`Literature-Translation-Setup-vX.Y.Z-windows-amd64.exe`（安装版）与 `Literature-Translation-vX.Y.Z-windows-amd64-portable.zip`（便携版），载荷 = 主 exe + LICENSE，两版同源
-- **一键体检**：`scripts\check.bat`（vet / workflow lint / go test 含管线 E2E / 前端 E2E），全部本地运行，不需要真实 LLM Key 与 MinerU 配额；覆盖语言路由、归档方案、字体校验、公式冻结/解冻、抽取对拍（词表级硬门槛）、解析校准全链路、断点续跑、前端交互与主题
+- **一键体检**：`scripts\check.bat`（vet / workflow lint / go test 含管线 E2E / 前端 E2E），全部本地运行，不需要真实 LLM Key 与 MinerU 配额；覆盖语言路由、归档方案、字体校验、公式冻结/解冻、PDF 文本抽取、解析校准全链路、断点续跑、前端交互与主题
 - **单独跑的两项**：模糊测试 `go test ./internal/pipeline -fuzz FuzzNewArchivePlan -fuzztime 30s`（种子语料随 go test 常跑，深挖用 -fuzz）；前端组件 E2E `npm ci && node tests/e2e_frontend.mjs`（Playwright 驱动真实前端 + mock 壳，需 Chrome/Edge）
 - **欢迎 PR**：fork → 建分支 → `scripts\check.bat` 四步全绿 → 提 PR（CI 自动跑同一套门禁、不产出安装包）。约定：gofmt 零告警；新增 Go 绑定必须在 shim（`tests/gui_preview/gui_shim.js`，window.go 的 mock，由 `tests/overlay_server.mjs` 注入）里加同名 mock，否则前端测试挂；归档目录常量在 `internal/pipeline/outputplan.go`，默认规则文本在 `internal/config`
 
