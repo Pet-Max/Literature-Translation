@@ -148,8 +148,13 @@ literature-translation font add|list|use|remove    # 字体管理
 ## License
 
 [MIT](LICENSE)
+## 友情链接
+
+[<img src="https://avatars.githubusercontent.com/u/160804563?v=4" width="21" align="center"> LINUX DO](https://linux.do) ——欢迎佬友交流使用体验、反馈问题
 
 ## 致谢
+
+没有以下功能，这款软件是不可能实现的：
 
 | 项目                                                         | 许可               | 用途                       |
 | ------------------------------------------------------------ | ------------------ | -------------------------- |
@@ -158,3 +163,4 @@ literature-translation font add|list|use|remove    # 字体管理
 | [霞鹜文楷](https://github.com/lxgw/LxgwWenKai)（[webfont 打包](https://github.com/chawyehsu/lxgw-wenkai-webfont)） | SIL OFL 1.1 / MIT  | 内嵌中文字体               |
 | [PDFium](https://pdfium.googlesource.com/pdfium/)（经 [go-pdfium](https://github.com/klippa-app/go-pdfium) 内嵌 wasm） | BSD-3-Clause / MIT | 引擎的 PDF 文本层抽取 |
 | [MinerU](https://mineru.net)                                 | 云服务             | 文档精准解析               |
+
