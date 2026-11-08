@@ -150,7 +150,7 @@ literature-translation font add|list|use|remove    # 字体管理
 [MIT](LICENSE)
 ## 友情链接
 
-[<img src="https://avatars.githubusercontent.com/u/160804563?v=4" width="21" align="center"> LINUX DO](https://linux.do) ——欢迎佬友交流使用体验、反馈问题
+[LINUX DO](https://linux.do) ——欢迎佬友交流使用体验、反馈问题
 
 ## 致谢
 
