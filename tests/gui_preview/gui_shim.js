@@ -54,16 +54,20 @@ const MOCK_LOGS = [
   { time: "10:47:55", level: "info", msg: "译文 33/34 段完成，等待失败段处理后统一排版" },
 ];
 
-const MOCK_IRON = "你是一名物理学/学术文献翻译引擎。把用户消息中的 Markdown 学术文本翻译成简体中文，严格遵守：\n\n1. 只翻译自然语言文字；⟦F1⟧、⟦F2⟧ 这类 ⟦F数字⟧ 占位符（代表公式、代码、图片、表格）必须原样保留：一个不能少、一个不能改、位置不能移动，也不要试图翻译或解读占位符内容。\n2. Eq. (5)、Fig. 3、Table 1、Ref. [12]、arXiv:2306.00417、附录编号 S IV 等引用编号保留原样，不要翻译 Eq./Fig. 等标记。\n3. Markdown 结构保持不变：标题层级（# 数量）、列表、引用块、加粗斜体、链接与原文一一对应；标题译文务必简短。\n4. 专有名词、人名、变量名（如 PSD、Langevin、Sz(ω) 中的记号）按学界惯例处理：有通用中译的用中译，没有的保留原文。\n5. 术语严格按术语表统一译名。\n6. 只输出译文本身。不要任何解释、前言、结语、代码围栏包裹。";
+// 出厂双预设文案与 internal/config 的 DefaultRules / GeneralRules 保持同源
+// （前端「恢复默认」按预设名区分还原源：物理→MOCK_IRON，其余→MOCK_GENERAL）。
+const MOCK_IRON = "你是一名物理学/学术文献翻译引擎。把用户消息中的 Markdown 学术文本翻译成简体中文，严格遵守：\n\n1. 只翻译自然语言文字；⟦F1⟧、⟦F2⟧ 这类 ⟦F数字⟧ 占位符（代表公式、代码、图片）必须原样保留：一个不能少、一个不能改、位置不能移动，也不要试图翻译或解读占位符内容。\n2. Eq. (5)、Fig. 3、Table 1、Ref. [12]、arXiv:2306.00417、附录编号 S IV 等引用编号保留原样，不要翻译 Eq./Fig. 等标记。\n3. Markdown 结构保持不变：标题层级（# 数量）、列表、引用块、加粗斜体、链接、表格与原文一一对应；标题译文务必简短。表格逐行保持竖线 | 与列数不变，只翻译单元格内的文字，单元格内的占位符原样保留。\n4. 物理记号原样保留：狄拉克记号（|00⟩、⟨01|）、希腊字母（Λ、Ω、ψ）、上下标变量，以及无法识别的乱码字符——一律不翻译、不删除、不猜测含义、不改写。\n5. 专有名词、人名按学界惯例处理：有通用中译的用中译（如 Schrödinger→薛定谔），没有的保留原文。\n6. 术语严格按下方术语表统一译名。\n7. 只输出译文本身。不要任何解释、前言、结语、代码围栏包裹。";
+
+const MOCK_GENERAL = "你是一名学术文献翻译引擎。把用户消息中的 Markdown 学术文本翻译成简体中文，严格遵守：\n\n1. 只翻译自然语言文字；⟦F1⟧、⟦F2⟧ 这类 ⟦F数字⟧ 占位符（代表公式、代码、图片）必须原样保留：一个不能少、一个不能改、位置不能移动，也不要试图翻译或解读占位符内容。\n2. Eq. (5)、Fig. 3、Table 1、Ref. [12]、arXiv:2306.00417、附录编号 S IV 等引用编号保留原样，不要翻译 Eq./Fig. 等标记。\n3. Markdown 结构保持不变：标题层级（# 数量）、列表、引用块、加粗斜体、链接、表格与原文一一对应；标题译文务必简短。表格逐行保持竖线 | 与列数不变，只翻译单元格内的文字，单元格内的占位符原样保留。\n4. 学科记号原样保留：数学/物理记号（狄拉克记号 |00⟩、⟨01|、希腊字母 Λ、上下标变量）、化学式与上下标（H<sub>2</sub>O 一类）、生物命名法（斜体的拉丁学名 *E. coli*、基因名 *BRCA1* 保持斜体与原文、不译成俗名）、代码标识符（驼峰/下划线命名、API 与文件路径），以及无法识别的乱码字符——一律不翻译、不删除、不猜测含义、不改写。\n5. 专有名词、人名按学界惯例处理：有通用中译的用中译（如 Schrödinger→薛定谔），没有的保留原文。\n6. 术语严格按下方术语表统一译名。\n7. 只输出译文本身。不要任何解释、前言、结语、代码围栏包裹。";
 
 const MOCK_CFG = {
   mineru: { token: "eyJ…demo", model_version: "vlm" },
   llm: { base_url: "https://open.bigmodel.cn/api/paas/v4", api_key: "sk-demo", model: "glm-4.6", concurrency: 3 },
   rules: {
-    active: "默认",
+    active: "物理",
     presets: [
-      { name: "默认", text: MOCK_IRON },
-      { name: "综述专用", text: MOCK_IRON + "\n\n这是综述文献：方法名保留英文；每节末尾用一句话概括作者观点。" },
+      { name: "物理", text: MOCK_IRON },
+      { name: "通用学术", text: MOCK_GENERAL },
     ],
     user_global: "",
   },
@@ -142,6 +146,7 @@ const mockApp = {
     ? Promise.reject("无法连接 GitHub（检查网络后重试）: Get \"https://api.github.com/repos/Pet-Max/Literature-Translation/releases/latest\": dial tcp 203.0.113.9:443: i/o timeout")
     : {has_update:false,current:"v1.0.5",latest:"v1.0.5",url:""},
   IronRules: async () => MOCK_IRON,
+  GeneralRules: async () => MOCK_GENERAL,
   PickFiles: async () => [],
   QueueState: async () => ({running:false,paused:true,pending:EMPTY ? 0:2}),
   QueueStart: async () => { mockState.calls.push({method:"start",config:cloneMock(MOCK_CFG)}); },
