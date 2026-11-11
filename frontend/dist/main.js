@@ -462,6 +462,7 @@ async function loadSettings(config = null) {
   $("cfg-repair-symbols").checked = CFG.repair?.symbols !== false;
   $("cfg-outdir").value = CFG.export?.output_dir || "";
   DEFAULT_RULES_TEXT = await App.IronRules();
+  GENERAL_RULES_TEXT = await App.GeneralRules();
   await loadFontSection();
   renderGlossary();
   renderRules();
@@ -523,7 +524,8 @@ const FONT_PRESETS = {
   yahei: { label: "黑体 · 屏读风（系统）", stack: '"Arial","Microsoft YaHei","PingFang SC",sans-serif' },
 };
 
-let DEFAULT_RULES_TEXT = "";
+let DEFAULT_RULES_TEXT = ""; // 「物理」出厂文案（App.IronRules）
+let GENERAL_RULES_TEXT = ""; // 「通用学术」出厂文案：非物理预设恢复默认的还原源、新建预设的初始底稿
 const RULES_MAX = 4000;
 let ruleOpen = -1;       // 展开中的预设下标，-1 = 全部折叠
 let ruleEditing = false; // 展开中的卡是否处于编辑态
@@ -550,7 +552,7 @@ function ruleCardHTML(p, i) {
       <div class="rule-actions">
         <button class="btn primary" data-rsave="${i}">应用到新任务</button>
         <button class="btn ghost-sm" data-rcancel>完成编辑</button>
-        <button class="btn ghost-sm" data-rreset="${i}">恢复默认</button>
+        <button class="btn ghost-sm" data-rreset="${i}" title="${restoreSourceFor(p.name).tip}">恢复默认</button>
         <span class="rules-count" data-rcount></span>
       </div>`;
   } else if (open) {
@@ -663,10 +665,20 @@ async function saveRuleText(i) {
   ruleEditing = false; renderRules(); flashSaved(i);
 }
 
+// restoreSourceFor 返回预设「恢复默认」的还原源与按钮提示：「物理」
+// 回物理出厂文案，其余（通用学术/新建/改名后的预设）统一回通用学术。
+function restoreSourceFor(name) {
+  const physics = name === "物理";
+  return {
+    text: physics ? DEFAULT_RULES_TEXT : GENERAL_RULES_TEXT,
+    tip: physics ? "还原为物理出厂规则" : "还原为通用学术出厂规则",
+  };
+}
+
 function resetRuleText() {
   const ta = document.querySelector("#rule-list [data-rtext]");
   if (!ta) return;
-  ta.value = DEFAULT_RULES_TEXT;
+  ta.value = restoreSourceFor(presets()[ruleOpen]?.name).text;
   captureRuleDraft(ta);
   ta.focus();
 }
@@ -705,7 +717,8 @@ function addRulePreset() {
   const names = new Set(ps.map((p) => p.name));
   let n = ps.length + 1;
   while (names.has(`预设${n}`)) n++;
-  ps.push({ name: `预设${n}`, text: DEFAULT_RULES_TEXT });
+  // 新建以「通用学术」为底稿：普适基线，与恢复默认的兜底源一致
+  ps.push({ name: `预设${n}`, text: GENERAL_RULES_TEXT });
   ruleEditing = true;
   ruleOpen = ps.length - 1;
   renderRules(); saveRulesDraft();

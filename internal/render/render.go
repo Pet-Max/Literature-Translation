@@ -126,6 +126,29 @@ var boldCmdRe = regexp.MustCompile(`\\(?:pmb|bm)\b`)
 // 公式变红字/裸文本；在已是数学模式的上下文里 \( \) 本就无意义。
 var nestedMathDelimRe = regexp.MustCompile(`\\[()]`)
 
+// quotePrefixRe 匹配行首引用标记；`(?:…)+` 兼容多层（英文原文自带引用块
+// 时，双语拼装会再包一层变成「> > 」）。
+var quotePrefixRe = regexp.MustCompile(`^(?:>[ \t]*)+`)
+
+// stripQuotePrefix 仅当行间公式捕获段内所有内部行都以引用标记开头（即
+// 整段处于双语对照拼出的引用块内）时，剥掉每行行首的引用标记——否则它们
+// 会混进 TeX 源码，被 KaTeX 当关系符号画进公式（双语导出公式两端多出
+// 「>」的根因）。混合型 TeX（部分行首恰为 >，如单独成行的不等式）不满足
+// 全量条件，原样保留。首行从 $$ 起（捕获边界决定），其行首引用标记留在
+// md 里交给 goldmark 解析引用块。
+func stripQuotePrefix(s string) string {
+	lines := strings.Split(s, "\n")
+	for _, ln := range lines[1:] {
+		if !quotePrefixRe.MatchString(ln) {
+			return s
+		}
+	}
+	for i, ln := range lines[1:] {
+		lines[i+1] = quotePrefixRe.ReplaceAllString(ln, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
 // markdownToHTML：冻结数学/代码/上下标 → goldmark → 回填（KaTeX 定界符）。
 func markdownToHTML(md string) string {
 	freezeMap := map[string]string{}
@@ -158,8 +181,10 @@ func markdownToHTML(md string) string {
 	// 嵌套冻结曾让回填顺序错乱、占位符以字面量泄漏进正文）。
 	// 上下标冻结不能用 add：内含公式的 <sub>$…$</sub> 已持有占位符，
 	// 跳过会让 goldmark 剥掉标签；此处允许嵌套，回填先外后内自然解开。
+	// 行间公式捕获段先经 stripQuotePrefix 剥除双语对照引用块的行首标记
+	// （围栏正则锚定行首，带前缀本就不命中，无需处理）。
 	text = fenceRe.ReplaceAllStringFunc(text, add)
-	text = dispRe.ReplaceAllStringFunc(text, add)
+	text = dispRe.ReplaceAllStringFunc(text, func(s string) string { return add(stripQuotePrefix(s)) })
 	text = regexp.MustCompile(`\$[^$\n]+?\$`).ReplaceAllStringFunc(text, add)
 	text = supRe.ReplaceAllStringFunc(text, freezeSpan)
 	text = subRe.ReplaceAllStringFunc(text, freezeSpan)

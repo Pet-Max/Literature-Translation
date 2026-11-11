@@ -19,6 +19,8 @@ export function FontList():Promise<Array<config.UserFont>>;
 
 export function FrontendReady():Promise<void>;
 
+export function GeneralRules():Promise<string>;
+
 export function GetConfig():Promise<config.Config>;
 
 export function GetConfigLoadState():Promise<config.LoadState>;

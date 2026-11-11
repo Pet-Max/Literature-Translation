@@ -498,8 +498,13 @@ func (a *App) afterQueueChange() {
 // GetConfig 返回当前配置（前端表单初值）。
 func (a *App) GetConfig() *config.Config { return a.cfg.Load().Clone() }
 
-// IronRules 系统默认规则文本（前端「恢复默认」的还原源）。
+// IronRules 「物理」预设的出厂规则文本（恢复默认的还原源之一，与引擎
+// 内置规则一致）。
 func (a *App) IronRules() string { return pipeline.IronRules }
+
+// GeneralRules 「通用学术」预设的出厂规则文本：其余预设「恢复默认」
+// 的还原源，也是新建预设的初始文案。
+func (a *App) GeneralRules() string { return config.GeneralRules }
 
 // PickFiles 打开原生多选文件对话框（PDF / MD）。取消或未选返回空切片。
 func (a *App) PickFiles() ([]string, error) {

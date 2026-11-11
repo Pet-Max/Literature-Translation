@@ -89,3 +89,43 @@ func TestNestedFreezeRestore(t *testing.T) {
 		t.Errorf("夹住围栏的 $$ 不应变成公式: %q", out)
 	}
 }
+
+// 回归：双语对照把原文逐行加「> 」前缀拼成引用块（engine 组装），行间
+// 公式的 $$…$$ 跨行捕获会把行首引用标记一起抓进 TeX 源码，KaTeX 将其
+// 当关系符号画进公式（双语导出公式两端多出「>」）。冻结前须剥掉。
+func TestQuotedDisplayMathStripped(t *testing.T) {
+	out := MarkdownToHTMLForTest("> $$\n> i \\hbar x\n> $$")
+	if strings.Contains(out, "&gt;") {
+		t.Errorf("引用标记混进公式源码: %q", out)
+	}
+	if !strings.Contains(out, "<blockquote>") || !strings.Contains(out, "ktx-disp") {
+		t.Errorf("引用块或公式结构丢失: %q", out)
+	}
+	if !strings.Contains(out, "i \\hbar x") {
+		t.Errorf("公式内容丢失: %q", out)
+	}
+	if strings.Contains(out, "⟦M") {
+		t.Errorf("占位符泄漏: %q", out)
+	}
+}
+
+// 混合型 TeX（部分行首恰为 >，如单独成行的不等式写法）：不满足「全段
+// 均为引用行」的剥除条件，必须原样保留。data-tex 中的 &gt; 是
+// html.EscapeString(>) 的产物，存在即证明未被误剥。
+func TestMixedQuoteTeXNotStripped(t *testing.T) {
+	out := MarkdownToHTMLForTest("$$\n> x\ny\n$$")
+	if !strings.Contains(out, "&gt;") {
+		t.Errorf("混合型 TeX 被误剥: %q", out)
+	}
+}
+
+// 单行引用公式（> $$x$$）：捕获不含内部行，剥除为空操作，内容不变。
+func TestSingleLineQuotedMath(t *testing.T) {
+	out := MarkdownToHTMLForTest("> $$x$$")
+	if !strings.Contains(out, `data-tex="x"`) {
+		t.Errorf("单行引用公式内容不符: %q", out)
+	}
+	if strings.Contains(out, "&gt;") {
+		t.Errorf("引用标记混进公式源码: %q", out)
+	}
+}

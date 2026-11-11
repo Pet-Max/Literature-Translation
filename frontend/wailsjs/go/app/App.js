@@ -34,6 +34,10 @@ export function FrontendReady() {
   return window['go']['app']['App']['FrontendReady']();
 }
 
+export function GeneralRules() {
+  return window['go']['app']['App']['GeneralRules']();
+}
+
 export function GetConfig() {
   return window['go']['app']['App']['GetConfig']();
 }
