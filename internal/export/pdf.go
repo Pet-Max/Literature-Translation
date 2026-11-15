@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -53,9 +54,6 @@ func (b *browserOutputBuf) Tail(n int) string {
 	return string(r)
 }
 
-// DebugLog 非空时输出导出过程诊断信息（CLI 注入 logf）。
-var DebugLog func(string)
-
 // FindBrowser 按顺序探测可用于导出的浏览器路径：Edge 优先，Chrome 兜底
 // （chromedp 对二者同等驱动；精简系统常见"无 Edge 有 Chrome"）。
 // App Paths 注册表覆盖 HKLM 机器级与 HKCU 用户级安装。
@@ -95,7 +93,8 @@ func FindBrowser() (string, error) {
 // 返回实际写入的路径——目标被阅读器占用时自动改用带时间戳的备用名。
 // userFontsDir 为用户导入字体目录（空串表示不挂载）。
 // workDir 作为 HTTP 根目录，供 HTML 里的图片相对路径引用。
-func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir string) (string, error) {
+// logf 接收渲染过程的用户可见提示（公式降级报告；nil 表示静默）。
+func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir string, logf func(string)) (string, error) {
 	browser, err := FindBrowser()
 	if err != nil {
 		return "", err
@@ -162,11 +161,12 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 	defer cancelAlloc()
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	defer cancelBrowser()
-	// 整个打印限时 300 秒（大文档的字体加载+公式渲染+打印确实耗时，小文档不受影响）
-	runCtx, cancelRun := context.WithTimeout(browserCtx, 300*time.Second)
+	// 整个打印限时 9 分钟（大文档的字体加载+公式渲染+打印确实耗时——
+	// 606 页书的打印实测需 4-5 分钟，300 秒上限会把合格成品误判为超时）
+	runCtx, cancelRun := context.WithTimeout(browserCtx, 540*time.Second)
 	defer cancelRun()
 
-	var ktxErr, diag, diag2 string
+	var ktxStatsJSON string
 	written := outPDF
 	err = chromedp.Run(runCtx,
 		// 本会话所有请求带上访问令牌（对应上方 HTTP 服务的校验）
@@ -175,28 +175,47 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 		chromedp.Navigate(url),
 		chromedp.Poll(`window.__ktxDone === true`, nil,
 			chromedp.WithPollingTimeout(30*time.Second)),
-		// 打印前由 Go 侧再驱动两轮宽公式适配（字体晚到时布局会变，
-		// 页面自身的定时器可能已经停了）；顺带抓取诊断快照
+		// 打印前由 Go 侧再驱动两轮适配（字体晚到时布局会变，页面自身
+		// 的定时器可能已经停了）：宽公式 → 宽表格/代码块 → 打印期公式
+		// 第二阶段（无下限续缩，见 render.js fitPrintFormulas 注释）
 		chromedp.Sleep(300*time.Millisecond),
-		chromedp.Evaluate(`(function () { fitWideFormulas(); return JSON.stringify({
-			katex: document.querySelectorAll('.katex').length,
-			overflow: [...document.querySelectorAll('.ktx-disp')].filter(function (e) { return e.scrollWidth > e.clientWidth + 2; }).length
-		}); })()`, &diag),
+		chromedp.Evaluate(`fitWideFormulas();fitWideOverflow();fitPrintFormulas()`, nil),
 		chromedp.Sleep(400*time.Millisecond),
-		chromedp.Evaluate(`(function () { fitWideFormulas(); return JSON.stringify({
-			katex: document.querySelectorAll('.katex').length,
-			overflow: [...document.querySelectorAll('.ktx-disp')].filter(function (e) { return e.scrollWidth > e.clientWidth + 2; }).length
-		}); })()`, &diag2),
+		chromedp.Evaluate(`fitWideFormulas();fitWideOverflow();fitPrintFormulas()`, nil),
 		chromedp.Sleep(300*time.Millisecond),
+		// 公式渲染结果整体取回（数量+样例消息）；空串说明页面异常
 		chromedp.Evaluate(`window.__renderStats && Array.isArray(window.__renderStats.errors)
-			? (window.__renderStats.errors.length ? '公式渲染失败（' + window.__renderStats.errors.length + ' 处）' : '')
-			: '缺少公式渲染结果' `, &ktxErr),
+			? JSON.stringify({ n: window.__renderStats.errors.length,
+				msgs: window.__renderStats.errors.slice(0, 8) })
+			: '' `, &ktxStatsJSON),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			if ktxErr != "" {
-				return fmt.Errorf("KaTeX 渲染报错: %s", ktxErr)
+			if ktxStatsJSON == "" {
+				return fmt.Errorf("缺少公式渲染结果")
 			}
-			if DebugLog != nil {
-				DebugLog("公式适配诊断: 首轮=" + diag + " 末轮=" + diag2)
+			var ktxStats struct {
+				N    int      `json:"n"`
+				Msgs []string `json:"msgs"`
+			}
+			if err := json.Unmarshal([]byte(ktxStatsJSON), &ktxStats); err != nil {
+				return fmt.Errorf("解析公式渲染结果失败: %w", err)
+			}
+			// 降级放行：个别公式解析失败不再否决整个任务——失败公式已在
+			// 页面上以红字源码呈现（render.js 的 catch 路径），PDF 照常
+			// 产出。此前的一票否决会让一本 500 页的书因十几个坏公式
+			// （扫描件上 MinerU 提取损伤很常见）整任务失败且无产物。
+			if ktxStats.N > 0 && logf != nil {
+				// 双语对照下同一坏公式在英文引用行与中文行各渲染一次、
+				// 错误串相同——去重条数才对应「独立坏公式」数
+				seen := map[string]bool{}
+				uniq := 0
+				for _, m := range ktxStats.Msgs {
+					if !seen[m] {
+						seen[m] = true
+						uniq++
+						logf(fmt.Sprintf("降级样例 %d/%d: %s", uniq, len(ktxStats.Msgs), m))
+					}
+				}
+				logf(fmt.Sprintf("公式渲染降级 %d 处（样例去重 %d 条），坏公式以红字源码保留在 PDF 中", ktxStats.N, uniq))
 			}
 			params := page.PrintToPDFParams{
 				PaperWidth:          8.27, // A4 竖版
@@ -233,7 +252,7 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 	if err != nil {
 		// 打印超时单独说明（避免漏出英文的 context deadline exceeded）
 		if errors.Is(err, context.DeadlineExceeded) {
-			return written, fmt.Errorf("PDF 打印超时（5 分钟）：文档较大或公式较多时可能发生，可重试")
+			return written, fmt.Errorf("PDF 打印超时（9 分钟）：文档较大或公式较多时可能发生，可重试")
 		}
 		// 启动类错误（chrome failed to start）已由 chromedp 自带浏览器输出；
 		// 其余错误（轮询超时、打印失败等）的浏览器输出本会被丢弃，这里补上，

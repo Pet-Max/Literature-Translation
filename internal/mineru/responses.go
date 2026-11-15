@@ -28,6 +28,11 @@ func retryable(err error) bool {
 	return errors.As(err, &network)
 }
 
+// Retryable 判断解析错误是否值得重试：网络类与限流类临时错误可重试；
+// 配额耗尽、认证失败、文件超限等终态错误不重试。分片解析的片级重试
+// 据此短路，避免对终态错误空转烧配额。
+func Retryable(err error) bool { return retryable(err) }
+
 func wait(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()

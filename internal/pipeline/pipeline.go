@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -55,10 +56,20 @@ type Pipeline struct {
 	CB        Callbacks
 	fontsDir  string
 	ownsFonts bool
+	// 单文件解析与批量解析（探针窗口/片）的测试注入钩子：nil 走真实
+	// MinerU 客户端；测试注入假实现（直接产出结果目录，不打网络）。
+	// parseBatch 为宽容模式（条目级失败不中止批次，逐条目回报），探针
+	// 与片解析各自处理。真实实现必须是方法（调用时读**当前** p.Cfg）：
+	// GUI 任务流的 taskPipeline() 会复制基础管线并替换 Cfg（基础管线
+	// 创建时 Cfg 为 nil、由 PrepareTask 填充）——若用捕获 cfg 的闭包，
+	// 任务里拿到的就是 nil，实机曾触发（invalid memory address）。
+	parseOneFn   func(ctx context.Context, pdfPath, workDir string, onState func(string)) (*mineru.Result, error)
+	parseBatchFn func(ctx context.Context, pdfPaths []string, workDir string, onState func(idx int, state string)) ([]*mineru.Result, []error, error)
 }
 
 // New 创建进程内编排器；
-// 保留 error 签名以兼容既有调用方。
+// 保留 error 签名以兼容既有调用方。解析实现留空走 parseOne/parseBatch
+// 默认方法（调用时读取 p.Cfg，兼容 taskPipeline 的配置替换模式）。
 func New(cfg *config.Config, cb Callbacks) (*Pipeline, error) {
 	return &Pipeline{Cfg: cfg, CB: cb}, nil
 }
@@ -73,6 +84,23 @@ func (p *Pipeline) warnf(format string, a ...any) {
 	if p.CB.Log != nil {
 		p.CB.Log("warn", fmt.Sprintf(format, a...))
 	}
+}
+
+// parseOne 单文件解析默认实现（调用时读取当前 p.Cfg——任务流的管线
+// 是 taskPipeline 复制并替换过 Cfg 的副本，方法接收者保证拿到正确快照）。
+func (p *Pipeline) parseOne(ctx context.Context, pdfPath, workDir string, onState func(string)) (*mineru.Result, error) {
+	if p.parseOneFn != nil { // 测试注入钩子
+		return p.parseOneFn(ctx, pdfPath, workDir, onState)
+	}
+	return mineru.ParsePDF(ctx, p.Cfg.MinerU.Token, pdfPath, p.Cfg.MinerU.ModelVersion, workDir, onState)
+}
+
+// parseBatch 批量解析默认实现（宽容模式：条目级失败不中止批次）。
+func (p *Pipeline) parseBatch(ctx context.Context, pdfPaths []string, workDir string, onState func(idx int, state string)) ([]*mineru.Result, []error, error) {
+	if p.parseBatchFn != nil { // 测试注入钩子
+		return p.parseBatchFn(ctx, pdfPaths, workDir, onState)
+	}
+	return mineru.ParseFilesBatch(ctx, p.Cfg.MinerU.Token, pdfPaths, p.Cfg.MinerU.ModelVersion, workDir, onState)
 }
 
 // SegmentFailure 最终翻译失败的段落（engine.SegmentFailure 的别名：
@@ -163,19 +191,14 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 	}
 	// 预检失败（无文本层/引擎异常）不拦路，走正常流程
 
-	// [1/4] MinerU 解析
+	// [1/4] MinerU 解析（内部判定页数/体积：未超限单文件；超限分片接续）
 	p.stage("解析中")
 	p.logf("MinerU 精准解析（%s 模式）…", cfg.MinerU.ModelVersion)
 	start := time.Now()
 	if err := input.check(ctx); err != nil {
 		return nil, err
 	}
-	res, err := mineru.ParsePDF(ctx, cfg.MinerU.Token, input.Path,
-		cfg.MinerU.ModelVersion, parseDir, func(state string) {
-			if p.CB.ParseState != nil {
-				p.CB.ParseState(state)
-			}
-		})
+	res, err := p.parseForTask(ctx, input.Path, parseDir)
 	if err != nil {
 		return nil, err
 	}
@@ -254,6 +277,10 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 	if err := input.check(ctx); err != nil {
 		return nil, err
 	}
+	// 任务成功：分片接续的中间产物（片 PDF/片结果/探针窗口）不再需要，
+	// 清理以减半归档占用（保留合并结果目录）。失败路径不清理——重试的
+	// 增量恢复依赖它们。
+	cleanupSplitArtifacts(parseDir)
 	archiveDir := workDir
 	if plan != nil {
 		archiveDir = plan.Dir
@@ -263,6 +290,31 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 		Total: tr.Total, Done: tr.Done, KeptReferences: tr.KeptReferences,
 		Failed: tr.Failed, Warnings: tr.Warnings,
 	}, nil
+}
+
+// oversizeIssue 描述超出 MinerU 单文件限制的具体问题；空串表示未超限。
+// 页数与体积都超时合并为一条消息，用户一次看到全部原因。
+func oversizeIssue(pages int, size int64) string {
+	var issues []string
+	if pages > mineru.MaxPages {
+		issues = append(issues, fmt.Sprintf("页数 %d 页超过单次 %d 页上限", pages, mineru.MaxPages))
+	}
+	if size > mineru.MaxBytes {
+		issues = append(issues, fmt.Sprintf("体积 %d MB 超过单次 %d MB 上限", size>>20, mineru.MaxBytes>>20))
+	}
+	if len(issues) == 0 {
+		return ""
+	}
+	return "PDF " + strings.Join(issues, "，") + "，请拆分后分批处理"
+}
+
+// fileSize 取文件字节数；读取失败返回 0（视为不超体积，不拦路）。
+func fileSize(path string) int64 {
+	st, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return st.Size()
 }
 
 // Recalibrate 对已解析的英文 MD 离线重跑校准（不烧 MinerU 配额）：
@@ -545,15 +597,32 @@ func (p *Pipeline) export(ctx context.Context, t zhTarget, outPDF string, useTOC
 	if err != nil {
 		return "", fmt.Errorf("读取译文 Markdown 失败: %w", err)
 	}
-	htmlDoc := render.Build(string(mdBytes), render.Options{
+	htmlDoc, buildStats := render.BuildWithStats(string(mdBytes), render.Options{
 		Title:       t.Title,
 		FontCSS:     fontStack(cfg),
 		UserFontCSS: userFontCSS(cfg),
 		TOC:         useTOC,
 		TwoColumn:   useTwo,
 	})
+	// 透明性：清洗命中必须可观察。干净文档零命中不产生任何日志；
+	// 干净书大量命中即说明管线自身（如合并缝合）出了损伤。
+	// 两个口径：Affected=受影响公式数；命中次数=规则触发次数，一条
+	// 公式可同时命中多条规则，故命中次数可能大于公式数。
+	if buildStats.Affected > 0 {
+		total := 0
+		parts := make([]string, 0, len(buildStats.Fixes))
+		for k, v := range buildStats.Fixes {
+			total += v
+			parts = append(parts, fmt.Sprintf("%s×%d", k, v))
+		}
+		sort.Strings(parts)
+		p.warnf("公式修复 %d 处（规则命中 %d 次：%s）",
+			buildStats.Affected, total, strings.Join(parts, "、"))
+	}
 	p.logf("排版渲染完成，Edge 打印 PDF …")
-	ctx, cancel := context.WithTimeout(ctx, 6*time.Minute)
+	// 10 分钟预算按大文档实情放宽：600+ 页书打印实测需 4-5 分钟（与
+	// pdf.go 的打印限时对齐），原 6 分钟会把合格成品误判为超时
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	fontsDir := p.fontsDir
 	if fontsDir == "" {
@@ -564,7 +633,8 @@ func (p *Pipeline) export(ctx context.Context, t zhTarget, outPDF string, useTOC
 	// 不重试，避免白等。打印本身幂等，重试零风险。
 	var finalPath string
 	for attempt := 1; ; attempt++ {
-		finalPath, err = export.PrintPDF(ctx, t.Dir, htmlDoc, outPDF, fontsDir)
+		finalPath, err = export.PrintPDF(ctx, t.Dir, htmlDoc, outPDF, fontsDir,
+			func(msg string) { p.warnf("%s", msg) })
 		if err == nil || attempt >= 3 || !isBrowserLaunchErr(err) {
 			break
 		}

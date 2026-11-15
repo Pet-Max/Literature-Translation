@@ -3,7 +3,8 @@
 // 数学公式（$…$ / $$…$$）在交给 goldmark 之前先替换为 ⟦Mn⟧ 占位符，
 // 防止 Markdown 解析器把公式里的 *、_、& 等符号当作语法；HTML 生成后
 // 再以 KaTeX 定界符 \( … \) / \[ … \] 原样回填（内容做 HTML 转义，
-// 浏览器解码后 KaTeX 收到原始 LaTeX）。
+// 浏览器解码后 KaTeX 收到原始 LaTeX；回填前公式 TeX 先经 texfix.go
+// 的窄清洗修复损伤，规则与门禁见该文件头注释）。
 package render
 
 import (
@@ -45,6 +46,23 @@ type Options struct {
 
 // Build 把 Markdown 转为完整可打印的 HTML 文档（不含 KaTeX 脚本挂载）。
 func Build(md string, opt Options) string {
+	html, _ := BuildWithStats(md, opt)
+	return html
+}
+
+// BuildStats 排版构建的清洗统计：Fixes 为规则命中明细（次数口径），
+// Affected 为命中过至少一条规则的公式数（公式口径）——一条公式可同时
+// 命中多条规则，命中次数可能大于公式数。
+type BuildStats struct {
+	Fixes    TexFixStats
+	Affected int
+}
+
+// BuildWithStats 同 Build，但额外返回 TeX 清洗统计。
+// 透明性：自动修复必须可观察——干净文档应当零命中，干净书大量命中
+// 即暴露管线自身出了损伤。
+func BuildWithStats(md string, opt Options) (string, BuildStats) {
+	fx := &texFixer{stats: TexFixStats{}}
 	// 封面标题优先取 MD 自身的一级标题（译文的真实标题），
 	// 并从正文移除避免与 doc-title 重复；没有一级标题才退回文件名。
 	title := strings.TrimSpace(opt.Title)
@@ -54,7 +72,7 @@ func Build(md string, opt Options) string {
 			md = strings.TrimLeft(md[m[1]:], "\n")
 		}
 	}
-	body := markdownToHTML(md)
+	body := markdownToHTML(md, fx)
 	toc := ""
 	if opt.TOC {
 		toc = buildTOC(body)
@@ -96,7 +114,7 @@ func Build(md string, opt Options) string {
 	b.WriteString("<article class=\"content\">\n" + body + "\n</article>\n")
 	b.WriteString(scriptTag)
 	b.WriteString("</body>\n</html>\n")
-	return b.String()
+	return b.String(), BuildStats{Fixes: fx.stats, Affected: fx.affected}
 }
 
 // 渲染占位符使用 U+27E6/U+27E7，编号空间独立于翻译引擎。
@@ -150,7 +168,8 @@ func stripQuotePrefix(s string) string {
 }
 
 // markdownToHTML：冻结数学/代码/上下标 → goldmark → 回填（KaTeX 定界符）。
-func markdownToHTML(md string) string {
+// fx 承接公式清洗命中统计，nil 安全。
+func markdownToHTML(md string, fx *texFixer) string {
 	freezeMap := map[string]string{}
 	n := 0
 	freezeSpan := func(s string) string {
@@ -208,16 +227,17 @@ func markdownToHTML(md string) string {
 	for i := n; i > 0; i-- {
 		key := fmt.Sprintf("⟦M%d⟧", i)
 		if raw, ok := freezeMap[key]; ok {
-			out = strings.ReplaceAll(out, key, restoreMath(key, raw))
+			out = strings.ReplaceAll(out, key, restoreMath(key, raw, fx))
 		}
 	}
 	return out
 }
 
 // restoreMath 把单个冻结区段还原为 HTML（代码块/ KaTeX 占位 span/上下标）。
+// 数学分支在拼接 data-tex 前先经 texfix 窄清洗（fx 为 nil 时只清洗不统计）。
 // 入口先还原冻结前转义的 \$：冻结发生在 \$→占位符替换之后，冻结区捕获
 // 的内容里残留 NUL+"ESC"+NUL 标记，不还原会以乱码进导出 HTML。
-func restoreMath(key, raw string) string {
+func restoreMath(key, raw string, fx *texFixer) string {
 	raw = unescape.Replace(raw)
 	if strings.HasPrefix(raw, "```") || strings.HasPrefix(raw, "~~~") {
 		langAndCode := strings.TrimPrefix(strings.TrimPrefix(raw, "```"), "~~~")
@@ -253,11 +273,13 @@ func restoreMath(key, raw string) string {
 	}
 	if strings.HasPrefix(raw, "$$") {
 		tex := strings.TrimSuffix(strings.TrimPrefix(raw, "$$"), "$$")
-		return `<span class="ktx-disp" data-tex="` + html.EscapeString(nestedMathDelimRe.ReplaceAllString(boldCmdRe.ReplaceAllString(tex, `\boldsymbol`), "")) + `"></span>`
+		tex = nestedMathDelimRe.ReplaceAllString(boldCmdRe.ReplaceAllString(tex, `\boldsymbol`), "")
+		return `<span class="ktx-disp" data-tex="` + html.EscapeString(fx.fix(tex)) + `"></span>`
 	}
 	tex := strings.TrimPrefix(raw, "$")
 	tex = strings.TrimSuffix(tex, "$")
-	return `<span class="ktx" data-tex="` + html.EscapeString(nestedMathDelimRe.ReplaceAllString(boldCmdRe.ReplaceAllString(tex, `\boldsymbol`), "")) + `"></span>`
+	tex = nestedMathDelimRe.ReplaceAllString(boldCmdRe.ReplaceAllString(tex, `\boldsymbol`), "")
+	return `<span class="ktx" data-tex="` + html.EscapeString(fx.fix(tex)) + `"></span>`
 }
 
 var headingRe = regexp.MustCompile(`<h([1-3]) id="([^"]*)"[^>]*>(.*?)</h[1-3]>`)
@@ -332,6 +354,11 @@ img { max-width:100%; display:block; margin:1em auto; }
 table { border-collapse:collapse; margin:1em auto; font-size:.95em; }
 th, td { border:1px solid var(--line); padding:.4em .8em; }
 th { background:#f1f2ec; }
+thead { display:table-header-group; }
+.content { overflow-wrap:anywhere; }
+pre, pre code { overflow-wrap:normal; }
+.tbl-fit { font-size:.72em; }
+.tbl-fit th, .tbl-fit td { padding:.15em .25em; }
 pre {
   background:#f4f4ef; border:1px solid var(--line); border-radius:5px;
   padding:.7em 1em; overflow-x:auto; font-size:.88em;

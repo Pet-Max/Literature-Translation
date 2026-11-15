@@ -70,7 +70,7 @@ func TestUnsafeHTMLescaped(t *testing.T) {
 
 // MarkdownToHTMLForTest 供测试访问内部转换。
 func MarkdownToHTMLForTest(md string) string {
-	return markdownToHTML(md)
+	return markdownToHTML(md, nil)
 }
 
 func TestNestedFreezeRestore(t *testing.T) {

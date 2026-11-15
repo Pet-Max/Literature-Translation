@@ -65,4 +65,13 @@ func TestExtractSyntheticSampleSmoke(t *testing.T) {
 			t.Fatalf("抽取文本缺少公式编号 (%d)", n)
 		}
 	}
+
+	// 页数检测（超限预检的数据源）：同一文档页数应为正数
+	n, err := pdftext.PageCount(smokeSamplePath)
+	if err != nil {
+		t.Fatalf("页数检测失败: %v", err)
+	}
+	if n < 1 {
+		t.Fatalf("页数异常: %d", n)
+	}
 }

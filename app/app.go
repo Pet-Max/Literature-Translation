@@ -21,6 +21,7 @@ import (
 
 	"literature-translation/internal/config"
 	"literature-translation/internal/fonts"
+	"literature-translation/internal/pdftext"
 	"literature-translation/internal/pipeline"
 	"literature-translation/internal/version"
 
@@ -118,13 +119,10 @@ func (a *App) newPipeline() (*pipeline.Pipeline, error) {
 			})
 		},
 		ParseState: func(state string) {
-			// MinerU 原始状态词翻译为可读中文，未知值原样透传
-			name := map[string]string{
-				"pending": "排队中", "running": "解析中", "done": "已完成", "failed": "失败",
-			}[state]
-			if name == "" {
-				name = state
-			}
+			// MinerU 原始状态词翻译为可读中文，未知值原样透传；
+			// 分片接续/探针的状态带「片 i/N 」「探针 i/N 」前缀
+			// （pipeline 侧合成），拆出末段状态词翻译后重组
+			name := translateParseState(state)
 			a.setTask(func(t *Task) { t.Stage = "解析中（" + name + "）" })
 		},
 		Stage: func(stage string) {
@@ -341,6 +339,31 @@ func (a *App) taskPipeline() *pipeline.Pipeline {
 	return &p
 }
 
+// translateParseState 解析状态词中文化。分片接续/探针的状态带「片 i/N 」
+// 「探针 i/N 」前缀（pipeline 侧合成），拆出末段状态词翻译后重组；
+// 单文件路径与未知词沿用原透传行为。
+func translateParseState(state string) string {
+	m := map[string]string{
+		"pending": "排队中", "running": "解析中", "done": "已完成", "failed": "失败",
+	}
+	for _, prefix := range []string{"片 ", "探针 "} {
+		rest, ok := strings.CutPrefix(state, prefix)
+		if !ok {
+			continue
+		}
+		if i := strings.LastIndex(rest, " "); i >= 0 {
+			if name := m[rest[i+1:]]; name != "" {
+				return prefix + rest[:i] + " " + name
+			}
+		}
+		return state
+	}
+	if name := m[state]; name != "" {
+		return name
+	}
+	return state
+}
+
 // QueueAddPDF 入队 PDF 全流程任务（可一次传多个）。
 // 仅自动档收 PDF：翻译档跳过解析、导出档只出 PDF，均拒绝。
 func (a *App) QueueAddPDF(paths []string, mode string) ([]Task, error) {
@@ -358,6 +381,29 @@ func (a *App) QueueAddPDF(paths []string, mode string) ([]Task, error) {
 			return out, err
 		}
 		out = append(out, t)
+		// 入队预告：页数与分片计划。异步预读——PageCount 需整读 PDF，
+		// 大文件在同步路径上会拖慢入队响应；预检失败不打扰，解析阶段兜底。
+		// 裸 goroutine 的 panic 会带崩整个应用（任务路径有 runTaskSafe
+		// 兜底，这里没有）——pdfium/wasm 内部异常兜底为日志
+		go func(p string) {
+			defer func() {
+				if r := recover(); r != nil {
+					a.pushLog("warn", fmt.Sprintf("入队预览异常（不影响任务）：%v", r))
+				}
+			}()
+			pages, perr := pdftext.PageCount(p)
+			if perr != nil {
+				return
+			}
+			var size int64
+			if st, serr := os.Stat(p); serr == nil {
+				size = st.Size()
+			}
+			if parts := pipeline.EstimateParts(pages, size); parts > 1 {
+				a.pushLog("info", fmt.Sprintf("%s：%d 页，超出单次解析上限，解析时将自动分为 %d 片接续",
+					filepath.Base(p), pages, parts))
+			}
+		}(p)
 	}
 	a.afterQueueChange()
 	return out, nil

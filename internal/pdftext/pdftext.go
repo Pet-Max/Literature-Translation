@@ -14,6 +14,7 @@
 package pdftext
 
 import (
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -36,9 +37,43 @@ func ensurePool() error {
 			MinIdle:  1, // 常驻一个 worker，首次调用免冷启动
 			MaxIdle:  1,
 			MaxTotal: 2,
+			// 打包版是 windowsgui 子系统：进程没有控制台句柄，WASI 默认
+			// 挂接 os.Stdout/os.Stderr 会因句柄无效导致模块实例化失败
+			//（GetFileType /dev/stdout: The handle is invalid），语言预检、
+			// 页数预检与拼写校准在打包版全部失效。pdfium 自身的日志输出
+			// 并不需要，丢弃即可。
+			Stdout: io.Discard,
+			Stderr: io.Discard,
 		})
 	})
 	return poolErr
+}
+
+// PageCount 返回 PDF 页数。不依赖文本层：扫描件同样可数。
+// 供超限预检使用（MinerU 单次解析 ≤200 页 / ≤200MB）。
+func PageCount(pdfPath string) (int, error) {
+	if err := ensurePool(); err != nil {
+		return 0, err
+	}
+	pdfBytes, err := os.ReadFile(pdfPath)
+	if err != nil {
+		return 0, err
+	}
+	instance, err := pool.GetInstance(2 * time.Minute)
+	if err != nil {
+		return 0, err
+	}
+	defer instance.Close()
+	doc, err := instance.OpenDocument(&requests.OpenDocument{File: &pdfBytes})
+	if err != nil {
+		return 0, err
+	}
+	defer instance.FPDF_CloseDocument(&requests.FPDF_CloseDocument{Document: doc.Document})
+	count, err := instance.FPDF_GetPageCount(&requests.FPDF_GetPageCount{Document: doc.Document})
+	if err != nil {
+		return 0, err
+	}
+	return count.PageCount, nil
 }
 
 // ligatures LaTeX CM 字体的连字码点：文本层里 "effects" 常以 ﬀ (U+FB00)

@@ -24,6 +24,13 @@ const (
 	pollEvery   = 5 * time.Second
 	pollTimeout = 20 * time.Minute
 
+	// MinerU 云端单文件限制（官方策略：≤200 页 / ≤200MB）。解析上传
+	// 与管线超限预检共用同一套常量，避免两处漂移。
+	MaxPages = 200
+	MaxBytes = 200 << 20
+	// 单个 batch 的条目上限（官方策略 ≤200 个）。
+	MaxFilesPerBatch = 200
+
 	// 单条目 / 整包解压上限：防 zip 炸弹写满磁盘。上限按实际解压
 	// 字节数计（LimitReader 计数），不信任 zip 头声明的大小。
 	maxZipEntry = 200 << 20
@@ -99,8 +106,8 @@ func parsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 	if err != nil {
 		return nil, fmt.Errorf("读取 PDF 失败: %w", err)
 	}
-	if len(data) > 200*1024*1024 {
-		return nil, errors.New("PDF 超过 MinerU 200MB 上限")
+	if len(data) > MaxBytes {
+		return nil, fmt.Errorf("PDF 超过 MinerU %dMB 上限", MaxBytes>>20)
 	}
 
 	// 1. 申请上传链接
@@ -248,6 +255,225 @@ func parsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 	}
 	purgeStale(workDir, published)
 	return &Result{MDPath: filepath.Join(published, rel)}, nil
+}
+
+// ParseFilesBatch 一次批次解析多个 PDF（探针窗口与片解析共用）：宽容
+// 模式——条目级失败不中止批次，逐条目回报结果与错误（探针调用方视
+// 条目失败为整体降级；片解析调用方对失败片单独重试）。服务端并行
+// 解析，墙钟时间 = 最慢片而非各片之和。onState 按条目序号回报状态。
+func ParseFilesBatch(ctx context.Context, token string, pdfPaths []string, modelVersion, workDir string,
+	onState func(idx int, state string)) ([]*Result, []error, error) {
+	return parseFilesBatch(ctx, token, pdfPaths, modelVersion, workDir, onState,
+		baseURL, pollEvery, pollTimeout, true)
+}
+
+// parseFilesBatch 批次解析公共实现。tolerant=false（探针）时条目失败
+// 直接中止批次；tolerant=true（片解析）时逐条目记入 itemErrs，其余
+// 条目照常解析发布。全局性失败（申请/上传/网络轮询故障）两种模式
+// 都整批中止。
+func parseFilesBatch(ctx context.Context, token string, pdfPaths []string, modelVersion, workDir string,
+	onState func(idx int, state string), apiBase string, interval, timeout time.Duration, tolerant bool) ([]*Result, []error, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if token == "" {
+		return nil, nil, errors.New("MinerU Token 未配置")
+	}
+	if len(pdfPaths) == 0 {
+		return nil, nil, errors.New("探针批次为空")
+	}
+	// 全部读入内存：探针窗口仅数页，体量可忽略；与 parsePDF 的整读一致。
+	datas := make([][]byte, len(pdfPaths))
+	files := make([]map[string]any, len(pdfPaths))
+	ts := time.Now().Format("20060102150405")
+	for i, p := range pdfPaths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil, nil, fmt.Errorf("读取 %s 失败: %w", p, err)
+		}
+		if len(data) > MaxBytes {
+			return nil, nil, fmt.Errorf("%s 超过 MinerU %dMB 上限", filepath.Base(p), MaxBytes>>20)
+		}
+		datas[i] = data
+		files[i] = map[string]any{
+			"name":    filepath.Base(p),
+			"is_ocr":  false, // 自动判断，扫描件 MinerU 会自行 OCR
+			"data_id": fmt.Sprintf("%s-%d", ts, i),
+		}
+	}
+
+	applyBody := map[string]any{
+		"enable_formula": true,
+		"enable_table":   true,
+		"model_version":  modelVersion,
+		"language":       "en",
+		"files":          files,
+	}
+	var apply apiResp
+	applyCtx, cancelApply := context.WithTimeout(ctx, 30*time.Second)
+	_, err := postJSON(applyCtx, token, apiBase+"/file-urls/batch", applyBody, &apply)
+	cancelApply()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := friendlyCode(apply); err != nil {
+		return nil, nil, err
+	}
+	if len(apply.Data.FileURLs) != len(pdfPaths) || apply.Data.BatchID == "" {
+		return nil, nil, fmt.Errorf("MinerU 未返回与请求数一致的批次上传链接（%d/%d）",
+			len(apply.Data.FileURLs), len(pdfPaths))
+	}
+
+	// 逐条目上传（预签名 URL 不带额外头，与官方客户端行为一致）
+	for i, putURL := range apply.Data.FileURLs {
+		putCtx, cancelPut := context.WithTimeout(ctx, 10*time.Minute)
+		req, err := http.NewRequestWithContext(putCtx, http.MethodPut, putURL, bytes.NewReader(datas[i]))
+		if err != nil {
+			cancelPut()
+			return nil, nil, err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			cancelPut()
+			return nil, nil, fmt.Errorf("上传第 %d 个探针窗口失败: %w", i+1, err)
+		}
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
+		resp.Body.Close()
+		cancelPut()
+		if resp.StatusCode != 200 {
+			return nil, nil, fmt.Errorf("上传第 %d 个探针窗口失败 HTTP %d", i+1, resp.StatusCode)
+		}
+	}
+
+	// 统一轮询：全部条目 done 才继续；任一 failed 即失败
+	deadline := time.Now().Add(timeout)
+	consecutiveFailures := 0
+	zipURLs := make([]string, len(pdfPaths))
+	itemErrs := make([]error, len(pdfPaths))
+	settled := make([]bool, len(pdfPaths))
+	for {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return nil, nil, errors.New("MinerU 探针解析超时（20 分钟）")
+		}
+		var pr apiResp
+		pollCtx, cancelPoll := context.WithTimeout(ctx, 30*time.Second)
+		err := getJSON(pollCtx, token, apiBase+"/extract-results/batch/"+apply.Data.BatchID, &pr)
+		cancelPoll()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+			consecutiveFailures++
+			if !retryable(err) || consecutiveFailures >= 5 {
+				return nil, nil, err
+			}
+			if err = wait(ctx, interval); err != nil {
+				return nil, nil, err
+			}
+			continue
+		}
+		consecutiveFailures = 0
+		if err := friendlyCode(pr); err != nil {
+			return nil, nil, err
+		}
+		if len(pr.Data.ExtractResult) != len(pdfPaths) {
+			return nil, nil, &APIError{Message: "MinerU 批次响应条目数与请求不符"}
+		}
+		// 宽容模式：条目级失败记入 itemErrs 不中止批次；strict 模式
+		// 立即中止（探针语义：任一窗口失败即整体降级）
+		itemFailed := make([]error, len(pdfPaths))
+		allSettled := true
+		for i, r := range pr.Data.ExtractResult {
+			if onState != nil {
+				onState(i, r.State)
+			}
+			if settled[i] {
+				continue
+			}
+			switch r.State {
+			case "done":
+				if r.FullZipURL == "" {
+					itemFailed[i] = &APIError{Message: fmt.Sprintf("MinerU 条目 %d 完成响应缺少结果地址", i+1)}
+					settled[i] = true
+				} else {
+					zipURLs[i] = r.FullZipURL
+					settled[i] = true
+				}
+			case "failed":
+				msg := r.ErrMsg
+				if msg == "" {
+					msg = "（未给出原因）"
+				}
+				itemFailed[i] = fmt.Errorf("MinerU 条目 %d 解析失败: %s", i+1, msg)
+				settled[i] = true
+			default:
+				allSettled = false
+			}
+		}
+		// 条目级失败入账：宽容模式继续等其余条目；strict 模式立即中止
+		for i, e := range itemFailed {
+			if e == nil {
+				continue
+			}
+			itemErrs[i] = e
+			if !tolerant {
+				return nil, nil, e
+			}
+		}
+		for i := range pdfPaths {
+			if !settled[i] {
+				allSettled = false
+				break
+			}
+		}
+		if allSettled {
+			break
+		}
+		if err := wait(ctx, interval); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	// 逐条目解包发布（与 parsePDF 相同的 stage → publish 模式）；失败
+	// 条目跳过（itemErrs 已记录），由调用方决定重试/降级
+	results := make([]*Result, len(pdfPaths))
+	for i := range pdfPaths {
+		if itemErrs[i] != nil {
+			continue
+		}
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			return nil, nil, err
+		}
+		stage, err := os.MkdirTemp(workDir, fmt.Sprintf(".probe-%d-*", i+1))
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := downloadZip(ctx, zipURLs[i], stage); err != nil {
+			os.RemoveAll(stage)
+			return nil, nil, err
+		}
+		result, err := locate(stage)
+		if err != nil {
+			os.RemoveAll(stage)
+			return nil, nil, err
+		}
+		rel, err := filepath.Rel(stage, result.MDPath)
+		if err != nil {
+			os.RemoveAll(stage)
+			return nil, nil, err
+		}
+		published := filepath.Join(workDir, fmt.Sprintf("probe-%d-%s",
+			i+1, strings.TrimPrefix(filepath.Base(stage), ".probe-")))
+		if err := os.Rename(stage, published); err != nil {
+			os.RemoveAll(stage)
+			return nil, nil, err
+		}
+		results[i] = &Result{MDPath: filepath.Join(published, rel)}
+	}
+	return results, itemErrs, nil
 }
 
 // purgeStale 发布成功后清理工作目录里历史解析产物与崩溃残留：本次发布的

@@ -37,6 +37,63 @@ function fitWideFormulas() {
     }
   });
 }
+// fitWideOverflow — 打印横向溢出收口：表格与代码块实测越出 .content 打印
+// 盒者逐级适配，装得下的元素零改动（恒等）。触发条件是运行时实测盒缘
+// 越界，无阈值、无文档特征。预览窗口同样生效——宽表在预览中原本也被
+// 窗口边缘裁切且无滚动条，压缩即改进。
+//   表格三级：层1 .tbl-fit（缩字号+紧凑 padding+长词可断）→ 层2
+//   table-layout:fixed + 定宽（横向不可能再溢出，数据零丢失硬保底）。
+//   代码块：不断词保语义，按比例缩字号至最长行适配，硬底 6px。
+// 每轮先复位再实测，多轮调用不累积（与 fitWideFormulas 同模式）。
+function fitWideOverflow() {
+  var clip = document.querySelector(".content").getBoundingClientRect();
+  if (!clip.width) { return; }
+  document.querySelectorAll("table").forEach(function (t) {
+    t.classList.remove("tbl-fit");
+    t.style.tableLayout = "";
+    t.style.width = "";
+    var r = t.getBoundingClientRect();
+    if (r.right > clip.right + 1 || r.left < clip.left - 1) {
+      t.classList.add("tbl-fit");
+      r = t.getBoundingClientRect();
+      if (r.right > clip.right + 1 || r.left < clip.left - 1) {
+        t.style.tableLayout = "fixed";
+        t.style.width = "calc(100% - 4px)";
+      }
+    }
+  });
+  document.querySelectorAll("pre").forEach(function (p) {
+    p.style.fontSize = "";
+    for (var i = 0; i < 8 && p.scrollWidth > p.clientWidth + 2; i++) {
+      var cur = parseFloat(getComputedStyle(p).fontSize) || 14;
+      p.style.fontSize = Math.max(6, cur * p.clientWidth / p.scrollWidth) + "px";
+    }
+  });
+}
+// fitPrintFormulas — 打印期第二阶段公式适配（只在导出打印通道调用，
+// 屏幕预览不调用、行为不变）：fitWideFormulas 有 0.55× 可读性下限，
+// 极宽行间公式在下限处仍会横向溢出，屏幕滚动无妨、打印即裁。对仍
+// 越界者继续缩放（无下限，硬底 6px）；行内 nowrap 公式越界者单条缩放。
+// 已知边界：表格单元格内溢出单元格但未越打印盒的公式不处理；缩至
+// 6px 硬底仍溢出者仍会被页边裁切。
+function fitPrintFormulas() {
+  var clip = document.querySelector(".content").getBoundingClientRect();
+  if (!clip.width) { return; }
+  document.querySelectorAll(".ktx-disp").forEach(function (el) {
+    for (var i = 0; i < 8 && el.scrollWidth > el.clientWidth + 2; i++) {
+      var cur = parseFloat(getComputedStyle(el).fontSize) || 15;
+      el.style.fontSize = Math.max(6, cur * 0.85) + "px";
+    }
+  });
+  document.querySelectorAll(".ktx").forEach(function (el) {
+    for (var i = 0; i < 6; i++) {
+      var r = el.getBoundingClientRect();
+      if (r.right <= clip.right + 1) { return; }
+      var cur = parseFloat(getComputedStyle(el).fontSize) || 15;
+      el.style.fontSize = Math.max(6, cur * 0.8) + "px";
+    }
+  });
+}
 function renderAll() {
   document.querySelectorAll(".ktx, .ktx-disp").forEach(function (el) {
     var tex = el.getAttribute("data-tex");
@@ -76,18 +133,19 @@ document.addEventListener("DOMContentLoaded", function () {
     setTimeout(function () {
       renderAll();
       fitWideFormulas();
-      setTimeout(function () { fitWideFormulas(); window.__ktxDone = true; }, 250);
+      fitWideOverflow();
+      setTimeout(function () { fitWideFormulas(); fitWideOverflow(); window.__ktxDone = true; }, 250);
     }, 30);
   });
   if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(function () { fitWideFormulas(); });
+    document.fonts.ready.then(function () { fitWideFormulas(); fitWideOverflow(); });
   }
   var fitTimer = null; // 预览场景窗口尺寸变化后重新适配（导出页无副作用）
   window.addEventListener("resize", function () {
     clearTimeout(fitTimer);
-    fitTimer = setTimeout(fitWideFormulas, 150);
+    fitTimer = setTimeout(function () { fitWideFormulas(); fitWideOverflow(); }, 150);
   });
   setTimeout(function () { // 兜底：字体接口异常也要出公式
-    if (!window.__ktxDone) { renderAll(); fitWideFormulas(); window.__ktxDone = true; }
+    if (!window.__ktxDone) { renderAll(); fitWideFormulas(); fitWideOverflow(); window.__ktxDone = true; }
   }, 5000);
 });
