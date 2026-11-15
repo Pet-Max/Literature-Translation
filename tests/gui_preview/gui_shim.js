@@ -151,6 +151,7 @@ const mockApp = {
   QueueState: async () => ({running:false,paused:true,pending:EMPTY ? 0:2}),
   QueueStart: async () => { mockState.calls.push({method:"start",config:cloneMock(MOCK_CFG)}); },
   QueuePause: async () => true,
+  QueuePauseNow: async () => { mockState.calls.push({method:"pauseNow"}); },
   QueueStartOne: async () => true,
   FontList: async () => FONTNULL ? null : cloneMock(MOCK_CFG.user_fonts),
   FontAdd: async () => {

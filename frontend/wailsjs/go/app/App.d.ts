@@ -44,6 +44,7 @@ export function QueueClearFinished():Promise<Array<app.Task>>;
 export function QueueList():Promise<Array<app.Task>>;
 
 export function QueuePause():Promise<void>;
+export function QueuePauseNow():Promise<void>;
 
 export function QueueRemove(arg1:string):Promise<void>;
 

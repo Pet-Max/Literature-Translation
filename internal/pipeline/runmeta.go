@@ -200,3 +200,37 @@ func (p *Pipeline) resumableRun(plan *ArchivePlan) (runMeta, error) {
 	}
 	return m, nil
 }
+
+// reusableArchiveParse 解析复用守卫：归档英文 MD 存在且与上次运行的源
+// 文件、配置指纹、校准后内容哈希一致时，判定可与上次运行共用同一份解析/
+// 校准产物——跳过 MinerU 与校准，直接进入翻译。与 resumableRun 的差异：
+// 不要求翻译已完成（暂停接续正是未完成场景），也不要求逐段进度对齐；
+// 指纹含解析器版本（Parser），解析模式/版本变化时不会误复用。
+func (p *Pipeline) reusableArchiveParse(plan *ArchivePlan) bool {
+	if plan == nil || plan.EnMDPath == "" {
+		return false
+	}
+	m, e := readRunMeta(metadataPath(plan.ZhMDPath, plan))
+	if e != nil {
+		return false
+	}
+	if m.Schema != 2 || m.SourceHash == "" || m.InputHash == "" {
+		return false
+	}
+	if m.ConfigFingerprint != p.configFingerprint() {
+		return false
+	}
+	h, e := fileHash(plan.SourcePath)
+	if e != nil || h != m.SourceHash {
+		return false
+	}
+	h, e = fileHash(plan.EnMDPath)
+	if e != nil || h != m.InputHash {
+		return false
+	}
+	resources, e := resourceHashes(plan.EnMDPath)
+	if e != nil || !reflect.DeepEqual(resources, m.InputResources) {
+		return false
+	}
+	return true
+}

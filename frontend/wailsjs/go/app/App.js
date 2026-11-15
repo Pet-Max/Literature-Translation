@@ -86,6 +86,10 @@ export function QueuePause() {
   return window['go']['app']['App']['QueuePause']();
 }
 
+export function QueuePauseNow() {
+  return window['go']['app']['App']['QueuePauseNow']();
+}
+
 export function QueueRemove(arg1) {
   return window['go']['app']['App']['QueueRemove'](arg1);
 }

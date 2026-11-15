@@ -54,6 +54,9 @@ function initSettingsBaseline() {
   const font = $("cfg-font").value;
   settingsConfirmed.export.font_preset = FONT_PRESETS[font] ? font : "custom";
   settingsConfirmed.export.user_font = FONT_PRESETS[font] ? "" : font;
+  // 英文/中文底色走色板手动保存（不在 settingsFields 通用绑定里），基线仍需登记以去重
+  settingsConfirmed.export.enbg = CFG.export?.enbg || "paper";
+  settingsConfirmed.export.zhbg = CFG.export?.zhbg || "paper";
 }
 function renderSidebarStatus() {
   if (sidebarVersion === null || !sidebarServiceConfig) return;

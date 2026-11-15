@@ -221,10 +221,15 @@ function taskCard(t) {
       <button class="btn" data-remove="${t.id}">取消排队</button>
     </div>`;
   } else {
-    sideActions = `<div class="btn-rows"><button class="btn" data-retry="${t.id}">重新排队</button></div>`;
+    // 运行中只保留立即暂停——「重新排队」对运行中任务必然被后端拒绝，
+    // 是只会弹错误弹窗的死按钮；要重排先「立即暂停」再重试
+    sideActions = `<div class="btn-rows"><button class="btn" data-pausenow="${t.id}" title="立即中断当前任务：断点已逐段落盘，点「开始」从断点接续">立即暂停</button></div>`;
   }
   const failNote = t.status === "失败" && t.err
     ? `<div class="fail-note">${esc(t.err.slice(0, 240))}</div>` : "";
+  // 仅重导出守卫未过的降级提示：告知为何这次从头执行（原因由后端给出）
+  const resumeNote = t.resume_note
+    ? `<div class="warn-note">${esc(t.resume_note)}</div>` : "";
   // 完成但有失败段：橙色提醒（区别于硬错误的红色），告知补翻路径
   const sweepNote = t.status === "完成" && t.failed > 0 && t.kind !== "export"
     ? `<div class="warn-note">有 ${t.failed} 段经多轮重试仍未通过校验，成品对应位置保留英文原文。点「重跑」补翻：已翻好的段走断点复用，只重翻失败段。</div>` : "";
@@ -242,6 +247,7 @@ function taskCard(t) {
       <div class="stepper">${stages}</div>
       ${progressHtml}
       ${failNote}
+      ${resumeNote}
       ${sweepNote}
     </div>
     <div class="task-side">
@@ -312,6 +318,11 @@ function bindCardButtons() {
         await showModal({ icon: "warn", title: "无法重新排队", body: esc(String(e)) });
       }
     });
+  });
+  document.querySelectorAll("[data-pausenow]").forEach((b) => {
+    if (b.dataset.bound) return;
+    b.dataset.bound = "1";
+    b.addEventListener("click", () => App.QueuePauseNow().then(() => renderQueue()).catch((e) => showModal({ icon: "warn", title: "无法暂停", body: esc(String(e)) })));
   });
   document.querySelectorAll("[data-remove]").forEach((b) => {
     if (b.dataset.bound) return;
@@ -461,6 +472,9 @@ async function loadSettings(config = null) {
   $("cfg-repair").checked = CFG.repair?.spelling !== false;
   $("cfg-repair-symbols").checked = CFG.repair?.symbols !== false;
   $("cfg-outdir").value = CFG.export?.output_dir || "";
+  renderEnBg();
+  renderZhBg();
+  syncEnBgRow();
   DEFAULT_RULES_TEXT = await App.IronRules();
   GENERAL_RULES_TEXT = await App.GeneralRules();
   await loadFontSection();
@@ -523,6 +537,98 @@ const FONT_PRESETS = {
   songti: { label: "宋体 · 刊物排版风（系统）", stack: '"Times New Roman","SimSun","Songti SC","STSong",serif' },
   yahei: { label: "黑体 · 屏读风（系统）", stack: '"Arial","Microsoft YaHei","PingFang SC",sans-serif' },
 };
+
+// ------------------------------------------------ 中英底色配色（色板 + 实时预览）
+
+// 英文引用块配色预设：键与后端 render.enQuoteCSS 对应，色值两侧保持一致。
+// paper 为现状默认（后端 const css 即此值，无需覆盖注入）。
+const ENBG_PRESETS = {
+  paper: { label: "米白（默认）", bg: "#fafaf7", ink: "#555b55" },
+  cool:  { label: "冷灰蓝（推荐）", bg: "#f0f4f7", ink: "#3e4c54" },
+  teal:  { label: "青灰", bg: "#eef3f1", ink: "#2E5A57" },
+  warm:  { label: "暖灰纸感", bg: "#f5f3ee", ink: "#4a4640" },
+  none:  { label: "无底色", bg: "transparent", ink: "#555b55" },
+};
+
+// 中文正文纸色/墨色预设：键与后端 render.zhBodyCSS 对应。paper=白纸黑墨现状
+// （后端不注入覆盖）；四档彩色纸各配一组深墨，保证对比度且墨色彼此可辨。
+const ZHBG_PRESETS = {
+  paper: { label: "白色（默认）", bg: "#fff", ink: "#1e2320" },
+  cream: { label: "米白", bg: "#fafaf7", ink: "#4a4436" },
+  cool:  { label: "冷灰蓝", bg: "#f0f4f7", ink: "#33414e" },
+  teal:  { label: "青灰", bg: "#eef3f1", ink: "#1f4a44" },
+  warm:  { label: "暖灰纸感", bg: "#f5f3ee", ink: "#4e453a" },
+};
+
+function enbgKey() { return ENBG_PRESETS[CFG.export?.enbg] ? CFG.export.enbg : "paper"; }
+function zhbgKey() { return ZHBG_PRESETS[CFG.export?.zhbg] ? CFG.export.zhbg : "paper"; }
+
+// renderSwatches 重画色板选中态；kind 为 data 属性名（enbg/zhbg），
+// chip 里的示例字形随语言变化（英文 Ag、中文 永）。「无底色/白色」芯片
+// 统一用白底 + 虚线示意「无」——transparent 在深色面板上会使芯片隐形
+function renderSwatches(box, presets, sel, kind, glyph) {
+  box.innerHTML = Object.entries(presets).map(([k, p]) => {
+    const empty = k === "none" || (kind === "zhbg" && k === "paper");
+    return `<button type="button" class="swatch${k === sel ? " sel" : ""}" data-${kind}="${k}">` +
+      `<span class="chip" style="background:${empty ? "#fff" : p.bg};color:${p.ink}` +
+      `${empty ? ";border-style:dashed" : ""}">${glyph}</span>` +
+      `<em>${p.label}</em></button>`;
+  }).join("");
+}
+
+// 实时预览：纸 = 中文预设，纸上的引用块 = 英文预设——两行色板共用一块预览
+function updateColorPreview() {
+  const paper = document.querySelector("#enbg-paper");
+  if (paper) { const z = ZHBG_PRESETS[zhbgKey()]; paper.style.background = z.bg; paper.style.color = z.ink; }
+  const bq = document.querySelector("#enbg-paper blockquote");
+  if (bq) { const e = ENBG_PRESETS[enbgKey()]; bq.style.background = e.bg; bq.style.color = e.ink; }
+}
+
+function renderEnBg() {
+  const box = $("enbg-swatches");
+  if (box) renderSwatches(box, ENBG_PRESETS, enbgKey(), "enbg", "Ag");
+  updateColorPreview();
+}
+
+function renderZhBg() {
+  const box = $("zhbg-swatches");
+  if (box) renderSwatches(box, ZHBG_PRESETS, zhbgKey(), "zhbg", "永");
+  updateColorPreview();
+}
+
+// 联动显隐：双语对照关闭时，英文底色行与预览中的英文引用块一并退场——
+// 预览只展示成品里真实存在的内容（所见即所得），标题文案随态切换
+function syncEnBgRow() {
+  const on = $("cfg-bilingual").checked;
+  const r = $("enbg-row");
+  if (r) r.hidden = !on;
+  const bq = document.querySelector("#enbg-paper blockquote");
+  if (bq) bq.style.display = on ? "" : "none";
+  const cap = $("enbg-preview-cap");
+  if (cap) cap.textContent = on
+    ? "实时预览：页面用「中文底色」，英文原文用「英文底色」"
+    : "实时预览：当前为纯译文效果；开启双语对照后将显示英文原文";
+}
+
+function bindSwatches() {
+  $("enbg-swatches").addEventListener("click", (e) => {
+    if (!settingsReady) return;
+    const btn = e.target.closest("[data-enbg]");
+    if (!btn || btn.classList.contains("sel")) return;
+    CFG.export.enbg = btn.dataset.enbg;
+    renderEnBg();
+    queueSettings("layout", { export: { enbg: CFG.export.enbg } }, 0);
+  });
+  $("zhbg-swatches").addEventListener("click", (e) => {
+    if (!settingsReady) return;
+    const btn = e.target.closest("[data-zhbg]");
+    if (!btn || btn.classList.contains("sel")) return;
+    CFG.export.zhbg = btn.dataset.zhbg;
+    renderZhBg();
+    queueSettings("layout", { export: { zhbg: CFG.export.zhbg } }, 0);
+  });
+  $("cfg-bilingual").addEventListener("change", syncEnBgRow);
+}
 
 let DEFAULT_RULES_TEXT = ""; // 「物理」出厂文案（App.IronRules）
 let GENERAL_RULES_TEXT = ""; // 「通用学术」出厂文案：非物理预设恢复默认的还原源、新建预设的初始底稿
@@ -1213,6 +1319,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     bindModeSwitch();
     bindQueueButtons();
     bindAutosave();
+    bindSwatches();
     bindLog();
     bindRulesStatic();
     // 侧栏底部 GitHub 入口：走系统默认浏览器（WebView 内不能开外链）

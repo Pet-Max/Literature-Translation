@@ -213,3 +213,65 @@ func TestQueuePersistRoundTrip(t *testing.T) {
 		t.Fatal("失败于排版中的任务重试应置位 ResumeExport")
 	}
 }
+
+// PauseNow：置位暂停标志与当前任务的 PauseRequested 并触发任务级取消；
+// 无进行中任务时仅暂停队列，不触发取消。
+func TestPauseNowCancelsCurrent(t *testing.T) {
+	q := NewTaskQueue(func(*Task) error { return nil })
+	if _, err := q.Add("pdf", `D:\tmp\paper.pdf`, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	q.mu.Lock()
+	q.tasks[0].Status = StatusTranslating
+	q.current = q.tasks[0]
+	q.mu.Unlock()
+	canceled := false
+	q.setCancelCurrent(func() { canceled = true })
+
+	q.PauseNow()
+
+	if !canceled {
+		t.Fatal("PauseNow 未触发任务级取消")
+	}
+	q.mu.Lock()
+	paused, requested := q.paused, q.tasks[0].PauseRequested
+	q.mu.Unlock()
+	if !paused || !requested {
+		t.Fatalf("paused=%v PauseRequested=%v, 期望均为 true", paused, requested)
+	}
+	// 翻译阶段暂停不记录 PauseStage（仅排版阶段需要仅重导出判定）
+	if q.tasks[0].PauseStage != "" {
+		t.Fatalf("翻译阶段暂停不应记录 PauseStage, got %q", q.tasks[0].PauseStage)
+	}
+
+	// 排版阶段暂停：PauseStage 记录来源阶段，重试仍走仅重导出短路
+	q3 := NewTaskQueue(func(*Task) error { return nil })
+	tk3, err := q3.Add("pdf", `D:\tmp\paper.pdf`, "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q3.mu.Lock()
+	q3.tasks[0].Status = StatusRendering
+	q3.current = q3.tasks[0]
+	q3.mu.Unlock()
+	q3.setCancelCurrent(func() {})
+	q3.PauseNow()
+	q3.Mutate(func(x *Task) { x.PauseStage = string(StatusRendering) }) // runner 侧记录（与 app.go 一致）
+	q3.mu.Lock()
+	q3.current = nil
+	q3.mu.Unlock()
+	if _, err := q3.Retry(tk3.ID); err != nil {
+		t.Fatal(err)
+	}
+	q3.mu.Lock()
+	defer q3.mu.Unlock()
+	if !q3.tasks[0].ResumeExport {
+		t.Fatal("排版阶段暂停后的重试应走仅重导出短路")
+	}
+
+	q2 := NewTaskQueue(func(*Task) error { return nil })
+	q2.PauseNow()
+	if !q2.IsPaused() {
+		t.Fatal("无进行中任务时 PauseNow 应暂停队列")
+	}
+}

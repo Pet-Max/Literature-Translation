@@ -28,6 +28,8 @@ type SettingsPatch struct {
 	} `json:"llm,omitempty"`
 	Export *struct {
 		Bilingual *bool   `json:"bilingual"`
+		EnBg      *string `json:"enbg"`
+		ZhBg      *string `json:"zhbg"`
 		TOC       *bool   `json:"toc"`
 		TwoColumn *bool   `json:"two_column"`
 		OutputDir *string `json:"output_dir"`

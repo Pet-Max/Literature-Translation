@@ -231,7 +231,7 @@ func TestE2ETranslateMDArchive(t *testing.T) {
 	}
 	// 排版设置变化可复用完成的译文；真实重导出保留统计且不再请求 LLM。
 	pl.Cfg.Export.TOC = !pl.Cfg.Export.TOC
-	resumed, ok, err := pl.ResumeExport(ctx, plan2)
+	resumed, ok, _, err := pl.ResumeExport(ctx, plan2)
 	if err != nil || !ok {
 		t.Fatalf("完成的译文不能重导出: ok=%v err=%v", ok, err)
 	}
@@ -408,7 +408,7 @@ func TestE2ECheckpointResume(t *testing.T) {
 	if err := os.WriteFile(metaPath, metaBytes, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, attempted, e := pl.ResumeExport(ctx, plan); attempted || e != nil {
+	if _, attempted, _, e := pl.ResumeExport(ctx, plan); attempted || e != nil {
 		t.Fatal("Schema 1 directly re-exported", e)
 	}
 

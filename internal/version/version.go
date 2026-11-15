@@ -5,6 +5,6 @@
 // build.bat 头部说明重生成 syso。
 package version
 
-const Version = "v1.3.1"
+const Version = "v1.4.0"
 
 func Display() string { return Version }

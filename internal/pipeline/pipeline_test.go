@@ -201,7 +201,7 @@ func TestRunMetadataGuardsAndFingerprints(t *testing.T) {
 		}
 	}
 	os.Remove(metadataPath(plan.ZhMDPath, plan))
-	if _, attempted, e := p.ResumeExport(ctx, plan); attempted || e != nil {
+	if _, attempted, _, e := p.ResumeExport(ctx, plan); attempted || e != nil {
 		t.Fatal("legacy archive directly exported", e)
 	}
 	// A known provider change selects independent checkpoint storage.
@@ -247,5 +247,65 @@ func TestTaskFontSurvivesUnregister(t *testing.T) {
 	latest, e := config.Load()
 	if e != nil || latest.Export.UserFont != "" {
 		t.Fatal("next task retains deleted font", e)
+	}
+}
+
+// reusableArchiveParse：解析复用守卫——归档英文 MD 与源文件/指纹一致时
+// 判定可续用；翻译未完成（暂停接续场景）不阻拦，内容/指纹/解析器变化
+// 与元数据缺失则拒绝。
+func TestReusableArchiveParse(t *testing.T) {
+	d := t.TempDir()
+	source := filepath.Join(d, "doc.pdf")
+	os.WriteFile(source, []byte("# Source\n\n![figure](same.png)"), 0600)
+	os.WriteFile(filepath.Join(d, "same.png"), []byte("resource"), 0600)
+	plan, e := NewArchivePlan(t.TempDir(), source)
+	if e != nil {
+		t.Fatal(e)
+	}
+	p, _ := New(config.Default(), Callbacks{})
+	ctx := context.Background()
+	if _, e = p.beginRun(ctx, source, source, plan.ZhMDPath, plan); e != nil {
+		t.Fatal(e)
+	}
+	copyFile(source, plan.EnMDPath)
+	archiveResources(context.Background(), source, plan.EnMDDir)
+	if !p.reusableArchiveParse(plan) {
+		t.Fatal("一致的归档英文 MD 应判定可复用")
+	}
+	// 翻译未完成（beginRun 后未 finishRun）不阻拦——暂停接续正是此场景
+	if m, e := readRunMeta(metadataPath(plan.ZhMDPath, plan)); e != nil || m.Complete {
+		t.Fatalf("前置状态异常: complete=%v err=%v", m.Complete, e)
+	}
+	if !p.reusableArchiveParse(plan) {
+		t.Fatal("翻译未完成也应复用（暂停接续场景）")
+	}
+	// 源文件变化 → 拒绝
+	os.WriteFile(source, []byte("changed"), 0600)
+	if p.reusableArchiveParse(plan) {
+		t.Fatal("源文件变化不应复用")
+	}
+	os.WriteFile(source, []byte("# Source\n\n![figure](same.png)"), 0600)
+	// 归档英文 MD 变化（如人工编辑）→ 拒绝
+	os.WriteFile(plan.EnMDPath, []byte("edited"), 0600)
+	if p.reusableArchiveParse(plan) {
+		t.Fatal("归档内容变化不应复用")
+	}
+	copyFile(source, plan.EnMDPath)
+	// 解析器版本变化 → 拒绝（指纹含 Parser）
+	original := p.Cfg.Clone()
+	p.Cfg.MinerU.ModelVersion = "other"
+	if p.reusableArchiveParse(plan) {
+		t.Fatal("解析器版本变化不应复用")
+	}
+	p.Cfg = original.Clone()
+	// 归档图片缺失 → 拒绝
+	os.Remove(filepath.Join(plan.EnMDDir, "same.png"))
+	if p.reusableArchiveParse(plan) {
+		t.Fatal("归档图片缺失不应复用")
+	}
+	// 元数据缺失 → 拒绝
+	os.Remove(metadataPath(plan.ZhMDPath, plan))
+	if p.reusableArchiveParse(plan) {
+		t.Fatal("缺少元数据不应复用")
 	}
 }

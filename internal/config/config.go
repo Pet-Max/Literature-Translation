@@ -138,6 +138,8 @@ type UserFont struct {
 // Export 导出选项。
 type Export struct {
 	Bilingual  bool   `json:"bilingual"`   // 译文段后附原文（引用块）
+	EnBg       string `json:"enbg"`        // 英文引用块配色预设键：paper|cool|teal|warm|none，空=paper（现状米白）
+	ZhBg       string `json:"zhbg"`        // 中文正文纸色/墨色预设键：paper|cream|cool|teal|warm，空=paper（白纸黑墨现状）
 	TOC        bool   `json:"toc"`         // 按标题层级生成目录
 	TwoColumn  bool   `json:"two_column"`  // 双栏排版（公式多时建议关）
 	FontPreset string `json:"font_preset"` // lxgw | songti | yahei | custom（导入字体）
@@ -260,6 +262,8 @@ func Default() *Config {
 		Export: Export{
 			// 出厂默认关闭：纯译文为主，需要对照的用户在设置里自行打开
 			Bilingual:  false,
+			EnBg:       "paper",
+			ZhBg:       "paper",
 			TOC:        false,
 			TwoColumn:  false,
 			FontPreset: "lxgw",

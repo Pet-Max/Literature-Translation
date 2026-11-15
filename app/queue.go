@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,7 +30,16 @@ type Task struct {
 	Mode string `json:"mode"` // 入队时的模式档位：auto | translate | export
 	// 上次失败于「排版中」的任务重试时置位：译文已归档且配置未变则跳过
 	// 解析与翻译仅重导出（不烧 MinerU / LLM 配额）。内部瞬态标记，不下发前端。
-	ResumeExport bool       `json:"-"`
+	ResumeExport bool `json:"-"`
+	// 仅重导出守卫未过时的降级原因，透出到任务卡片提示行；重试时清空
+	ResumeNote string `json:"resume_note,omitempty"`
+	// 立即暂停标记：PauseNow 置位，统一失败路径据此区分「用户暂停」与
+	// 「真错误」——前者任务回到等待（断点已逐段落盘，点开始接续），
+	// 后者按失败处理。瞬态标记，不下发前端。
+	PauseRequested bool `json:"-"`
+	// 暂停发生时所处的阶段（仅排版阶段保留值）：仅重导出短路的重试判定
+	// 依据，与卡片文案解耦。随队列持久化，重启后重试仍能正确短路。
+	PauseStage string `json:"pause_stage,omitempty"`
 	SourcePath   string     `json:"source_path"`
 	Status       TaskStatus `json:"status"`
 	Stage        string     `json:"stage"`
@@ -62,6 +73,9 @@ type TaskQueue struct {
 	idSeq     atomic.Uint64 // 任务 ID 序列：防 UnixNano 同毫秒碰撞
 	onIdle    func()        // 每篇跑完后的回调（App 用于推送队列状态变化）
 	onPersist func([]Task)  // 队列状态节点回调（App 落盘 queue.json；锁外调用）
+	// 当前任务的任务级取消函数（立即暂停用），由 runner 登记与清除；
+	// 与 Shutdown 的全局 queueCancel 语义独立，互不影响。
+	cancelCurrent context.CancelFunc
 }
 
 // NewTaskQueue 创建队列（调用 Worker 启动处理循环）。初始为待开始态。
@@ -148,6 +162,29 @@ func (q *TaskQueue) Pause() {
 	q.mu.Lock()
 	q.paused = true
 	q.mu.Unlock()
+}
+
+// setCancelCurrent 登记/清除当前任务的任务级取消函数（立即暂停用）。
+func (q *TaskQueue) setCancelCurrent(cancel context.CancelFunc) {
+	q.mu.Lock()
+	q.cancelCurrent = cancel
+	q.mu.Unlock()
+}
+
+// PauseNow 立即暂停：取消当前任务的翻译/排版上下文并暂停队列，之后不
+// 再取新任务。断点已逐段落盘，重新开始时从断点接续；解析/排版阶段被
+// 中断则对应步骤作废，重开重跑该步骤。无进行中任务时等价于 Pause。
+func (q *TaskQueue) PauseNow() {
+	q.mu.Lock()
+	q.paused = true
+	cancel := q.cancelCurrent
+	if q.current != nil {
+		q.current.PauseRequested = true
+	}
+	q.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // IsPaused 队列是否处于暂停/待开始状态。
@@ -296,8 +333,13 @@ func (q *TaskQueue) Retry(id string) (Task, error) {
 		return Task{}, fmt.Errorf("任务正在处理，跑完后再重跑")
 	}
 	// 先捕获上次失败阶段再重置：失败于「排版中」的重试走「仅重导出」
-	// 短路（守卫在 pipeline.ResumeExport：译文归档齐全且配置未变才跳过）
-	t.ResumeExport = t.Stage == string(StatusRendering)
+	// 短路（守卫在 pipeline.ResumeExport：译文归档齐全且配置未变才跳过）。
+	// HasPrefix 兼容硬错误的纯 Stage；立即暂停的排版中断由 PauseStage
+	// 标记（与卡片文案解耦），两者任一命中即短路
+	t.ResumeExport = strings.HasPrefix(t.Stage, string(StatusRendering)) ||
+		t.PauseStage == string(StatusRendering)
+	t.ResumeNote = "" // 上次尝试的降级原因不再适用于新一轮尝试
+	t.PauseStage = ""
 	t.Status = StatusPending
 	t.Stage = "重新排队"
 	t.Err = ""

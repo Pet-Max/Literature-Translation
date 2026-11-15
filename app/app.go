@@ -342,8 +342,21 @@ func (a *App) runTask(t *Task) error {
 	a.setTask(func(x *Task) {
 		x.Status = StatusPending
 		x.Err = ""
+		x.PauseRequested = false
 		x.DoneIdx, x.FailedIdx, x.Sweeping = nil, nil, false
+		// 接续起步占位：暂停过的任务点「开始」后，首个阶段事件到达前
+		// 不再显示上一轮的「已暂停」文案；新任务/重跑的占位不受影响
+		if strings.Contains(x.Stage, "已暂停") {
+			x.Stage = "接续中"
+		}
 	})
+
+	// 任务级上下文：立即暂停只取消当前任务（断点已逐段落盘，重新开始时
+	// 从断点接续），不影响队列其余部分；Shutdown 的全局 queueCtx 语义独立。
+	taskCtx, cancelTask := context.WithCancel(a.queueCtx)
+	defer cancelTask()
+	a.queue.setCancelCurrent(cancelTask)
+	defer a.queue.setCancelCurrent(nil)
 
 	// One immutable snapshot for every stage of this task.
 	pl := a.taskPipeline()
@@ -372,49 +385,91 @@ func (a *App) runTask(t *Task) error {
 	var res *pipeline.Result
 	switch t.Kind {
 	case "pdf":
-		// 上次失败于排版阶段的重试：译文已归档且配置未变时仅重导出，
-		// 不重烧 MinerU / LLM 配额；守卫未过则照旧走全流程
-		if t.ResumeExport {
+		// 上次失败于排版阶段的重试/「开始」接续（排版中暂停）：译文已归档
+		// 且配置未变时仅重导出，不重烧 MinerU / LLM 配额；守卫未过则照旧
+		// 走全流程，原因透出卡片
+		if t.ResumeExport || t.PauseStage == string(StatusRendering) {
 			var attempted bool
-			res, attempted, err = pl.ResumeExport(a.queueCtx, plan)
+			var reason string
+			res, attempted, reason, err = pl.ResumeExport(taskCtx, plan)
 			if attempted {
 				break // 短路已成或导出本身失败（err 走统一失败路径），不再全流程
 			}
+			a.setTask(func(x *Task) {
+				x.ResumeNote = "无法续用上次译文（" + reason + "），本次重新解析、校准、翻译并导出"
+			})
 		}
 		a.setTask(func(x *Task) {
 			x.Status = StatusParsing
 			x.Stage = "MinerU 精准解析"
 		})
-		res, err = pl.RunPDF(a.queueCtx, t.SourcePath, "", plan)
+		res, err = pl.RunPDF(taskCtx, t.SourcePath, "", plan)
 	case "md":
-		// 同 pdf：MD 任务失败于排版阶段的重试也可仅重导出
-		if t.ResumeExport {
+		// 同 pdf：MD 任务失败于排版阶段的重试/「开始」接续也可仅重导出
+		if t.ResumeExport || t.PauseStage == string(StatusRendering) {
 			var attempted bool
-			res, attempted, err = pl.ResumeExport(a.queueCtx, plan)
+			var reason string
+			res, attempted, reason, err = pl.ResumeExport(taskCtx, plan)
 			if attempted {
 				break
 			}
+			a.setTask(func(x *Task) {
+				x.ResumeNote = "无法续用上次译文（" + reason + "），本次重新翻译并导出"
+			})
 		}
 		a.setTask(func(x *Task) {
 			x.Status = StatusTranslating
 			x.Stage = "翻译中"
 		})
-		res, err = pl.TranslateMD(a.queueCtx, t.SourcePath, "", plan)
+		res, err = pl.TranslateMD(taskCtx, t.SourcePath, "", plan)
 	case "export":
 		a.setTask(func(x *Task) {
 			x.Status = StatusRendering
 			x.Stage = "排版中"
 		})
-		res, err = pl.ExportMDPlan(a.queueCtx, t.SourcePath, plan)
+		res, err = pl.ExportMDPlan(taskCtx, t.SourcePath, plan)
 	default:
 		return fmt.Errorf("未知任务类型: %s", t.Kind)
 	}
 
 	if err != nil {
+		paused := false
 		a.setTask(func(x *Task) {
+			// 立即暂停：不是错误——断点已逐段落盘，任务回到等待，
+			// 点「开始」从断点接续；解析/排版被中断则对应步骤作废重跑
+			if x.PauseRequested {
+				paused = true
+				switch x.Status {
+				case StatusTranslating:
+					x.Stage = fmt.Sprintf("翻译已暂停（已完成 %d/%d 段）", x.Done, x.Total)
+					x.PauseStage = ""
+				case StatusParsing:
+					x.Stage = "解析已暂停（重开将重新解析）"
+					x.PauseStage = ""
+				case StatusRendering:
+					x.Stage = "导出已暂停（重开将重新导出）"
+					// 记住暂停发生在排版阶段：文案与逻辑解耦，重试与
+					// 「开始」接续的仅重导出判定不依赖卡片文案
+					x.PauseStage = string(StatusRendering)
+				default:
+					// 兜底：任务尚未进入任何活动阶段（如 PrepareTask 窗口）
+					x.Stage = "已暂停"
+					x.PauseStage = ""
+				}
+				x.Status = StatusPending
+				x.Err = ""
+				x.ResumeNote = "" // 降级提示描述的是被暂停打断的那次尝试，暂停即清
+				x.PauseRequested = false
+				return
+			}
 			x.Status = StatusFailed
 			x.Err = err.Error()
 		})
+		if paused {
+			a.logEmit("info", t.Code+" 已暂停：断点已逐段落盘，点「开始」从断点接续")
+			// 返回 nil：Worker 不再强制覆盖失败态（暂停态已在上面就位）
+			return nil
+		}
 		a.logEmit("error", t.Code+" 失败: "+err.Error())
 		return err
 	}
@@ -429,6 +484,9 @@ func (a *App) runTask(t *Task) error {
 		x.Total = res.Total
 		x.Failed = len(res.Failed)
 		x.RefsKept = res.KeptReferences
+		x.ResumeNote = "" // 降级提示只描述本次尝试，成功即清
+		x.PauseRequested = false
+		x.PauseStage = ""
 	})
 	return nil
 }
@@ -583,6 +641,14 @@ func (a *App) QueuePause() {
 	a.queue.Pause()
 	a.afterQueueChange()
 	a.logEmit("info", "队列已暂停：当前任务完成后停止")
+}
+
+// QueuePauseNow 立即暂停：中断当前任务（断点已逐段落盘，重新开始时从
+// 断点接续），并暂停队列不再领取等待中的任务。无进行中任务时等价于暂停。
+func (a *App) QueuePauseNow() {
+	a.queue.PauseNow()
+	a.afterQueueChange()
+	a.logEmit("info", "已立即暂停：断点已逐段落盘，点「开始」从断点接续")
 }
 
 // QueueStartOne 只开始一个等待中的任务（提到队首，跑完即停，其余任务不动）。

@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'">
 <title>Literature Translation</title>
-<link rel="stylesheet" href="./styles.css?v=1.2.1">
+<link rel="stylesheet" href="./styles.css?v=1.4.0">
 <link rel="stylesheet" href="/assets/katex/katex.min.css">
 <link rel="stylesheet" href="/assets/lxgw/lxgwwenkai-regular.css">
 <link rel="stylesheet" href="/assets/lxgw/lxgwwenkai-bold.css">
@@ -144,10 +144,29 @@
 
       <div class="set-card" data-section="layout">
         <h3>排版选项</h3>
-        <div class="card-hint">译文版面样式与解析损伤修复的开关</div>
+        <div class="card-hint">译文版面样式、配色与解析损伤修复</div>
+        <div class="zhbg-row">
+          <span class="t-name">中文底色</span>
+          <span class="t-desc">页面颜色与文字颜色，正文、标题、目录一起变</span>
+        </div>
+        <div class="swatches" id="zhbg-swatches"></div>
         <div class="toggle-row">
           <span class="switch"><input type="checkbox" id="cfg-bilingual"><i></i></span>
-          <span class="t-name">双语对照</span><span class="t-desc">译文段落后附原文段落</span>
+          <span class="t-name">双语对照</span><span class="t-desc">每段译文下方附英文原文，方便对照</span>
+        </div>
+        <div class="enbg-row" id="enbg-row" hidden>
+          <div class="enbg-line">
+            <span class="t-name">英文底色</span>
+            <span class="t-desc">英文原文的配色，开启双语对照后生效</span>
+          </div>
+          <div class="swatches" id="enbg-swatches"></div>
+        </div>
+        <div class="enbg-preview">
+          <div class="enbg-preview-cap" id="enbg-preview-cap">实时预览：页面用「中文底色」，英文原文用「英文底色」</div>
+          <div class="enbg-paper" id="enbg-paper">
+            <p>本研究围绕这一问题提出了系统性的分析框架，并结合实证数据加以验证，结果表明所提方法在不同场景下均具有良好表现。</p>
+            <blockquote><p>This study proposes a systematic framework to address the problem and validates it with empirical data. The results demonstrate that the proposed method performs consistently well across different scenarios.</p></blockquote>
+          </div>
         </div>
         <div class="toggle-row">
           <span class="switch"><input type="checkbox" id="cfg-toc"><i></i></span>
@@ -232,7 +251,7 @@
   </div>
 </div>
 <script defer src="/assets/katex/katex.min.js"></script>
-<script src="/main.js?v=1.2.1"></script>
-<script src="/autosave.js?v=1.2.1"></script>
+<script src="/main.js?v=1.4.0"></script>
+<script src="/autosave.js?v=1.4.0"></script>
 </body>
 </html>

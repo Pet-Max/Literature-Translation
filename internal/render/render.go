@@ -40,6 +40,8 @@ type Options struct {
 	Title       string // 文档标题（取文件名）
 	FontCSS     string // 正文 font-family 声明
 	UserFontCSS string // 用户导入字体的 @font-face 片段（空=无）
+	EnBg        string // 双语对照英文引用块配色预设键，空或 paper=默认米白
+	ZhBg        string // 中文正文纸色/墨色预设键，空或 paper=白纸黑墨现状
 	TOC         bool   // 是否生成目录
 	TwoColumn   bool   // 双栏排版
 }
@@ -82,6 +84,7 @@ func BuildWithStats(md string, opt Options) (string, BuildStats) {
 	if opt.TwoColumn {
 		twoCol = ".content{columns:2;column-gap:2.2em}"
 	}
+	quoteCSS := enQuoteCSS(opt.EnBg) + "\n" + zhBodyCSS(opt.ZhBg)
 	font := opt.FontCSS
 	if strings.TrimSpace(font) == "" {
 		font = `"Microsoft YaHei", sans-serif`
@@ -103,7 +106,7 @@ func BuildWithStats(md string, opt Options) (string, BuildStats) {
 	// 公式横线减细：Edge 打印把 KaTeX 的 0.75pt 横线取整得偏粗，视觉上
 	// 明显重于 LaTeX 标准（0.476pt）。scaleY(0.6) 实测压到 ~0.45pt
 	// 该样式仅调整横线视觉厚度。
-	b.WriteString("<style>\n" + css + "\n" + twoCol +
+	b.WriteString("<style>\n" + css + "\n" + twoCol + "\n" + quoteCSS +
 		"\n.mfrac .frac-line,.overline .overline-line{transform:scaleY(0.6);transform-origin:bottom}" +
 		"\nbody{font-family:" + font + "}\n" + opt.UserFontCSS + "\n</style>\n")
 	b.WriteString("</head>\n<body>\n")
@@ -315,6 +318,43 @@ const scriptTag = `<script src="/assets/katex/katex.min.js"></script>
 <script src="/assets/katex/render.js"></script>
 `
 
+// enQuoteCSS 双语对照英文引用块的配色覆盖。键与前端设置页的色板一一对应；
+// paper（米白现状）即 const css 里的默认值，无需覆盖。未知键一律回落默认，
+// 手改配置文件填了预设外的值时不至于产出无样式引用块。
+func enQuoteCSS(key string) string {
+	switch key {
+	case "cool":
+		return "blockquote{background:#f0f4f7;color:#3e4c54}"
+	case "teal":
+		return "blockquote{background:#eef3f1;color:#2E5A57}"
+	case "warm":
+		return "blockquote{background:#f5f3ee;color:#4a4640}"
+	case "none":
+		return "blockquote{background:none}"
+	default:
+		return ""
+	}
+}
+
+// zhBodyCSS 中文正文纸色/墨色覆盖：中文区没有独立容器，逐段上色会出斑马纹，
+// 故整页纸色落在 body 上（PrintBackground 已开，PDF 同步）；墨色走 body color
+// 继承到标题/目录文字，英文引用块有独立 color 不受影响。paper=白纸黑墨现状，
+// 不覆盖。色板键同样与前端一一对应。
+func zhBodyCSS(key string) string {
+	switch key {
+	case "cream":
+		return "body{background:#fafaf7;color:#4a4436}"
+	case "cool":
+		return "body{background:#f0f4f7;color:#33414e}"
+	case "teal":
+		return "body{background:#eef3f1;color:#1f4a44}"
+	case "warm":
+		return "body{background:#f5f3ee;color:#4e453a}"
+	default:
+		return ""
+	}
+}
+
 const css = `
 :root { --ink:#1e2320; --ink2:#555b55; --line:#d8dad2; --teal:#2E5A57; }
 html { font-size:15px; }
@@ -345,7 +385,7 @@ h1, h2, h3, h4, h5, h6, strong, b { font-weight:700; }
 h1 { font-size:1.35em; } h2 { font-size:1.2em; } h3 { font-size:1.08em; }
 p { margin:.55em 0; text-align:justify; }
 blockquote {
-  margin:.6em 0; padding:.35em 1em; border-left:3px solid var(--line);
+  margin:.6em 0; padding:.35em 1em;
   color:var(--ink2); background:#fafaf7; border-radius:0 4px 4px 0;
   font-size:.94em;
 }

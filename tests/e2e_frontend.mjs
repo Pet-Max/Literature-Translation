@@ -111,6 +111,26 @@ console.log("\n[3] 设置视图");
   const sw = await page.locator(".switch i").first().evaluate((el) => getComputedStyle(el).borderRadius);
   ok("开关胶囊圆角 999px", sw === "999px", sw);
 
+  // 中英底色色板：渲染、点击落盘、选中态、随双语开关的联动显隐
+  ok("英文色板渲染 5 档", await page.locator("#enbg-swatches .swatch").count() === 5);
+  ok("中文色板渲染 5 档", await page.locator("#zhbg-swatches .swatch").count() === 5);
+  await page.click('#enbg-swatches [data-enbg="teal"]');
+  await until(() => page.evaluate(()=>MOCK_CFG.export.enbg) === "teal");
+  ok("英文色板点击自动保存", await page.evaluate(()=>MOCK_CFG.export.enbg) === "teal");
+  await page.click('#zhbg-swatches [data-zhbg="warm"]');
+  await until(() => page.evaluate(()=>MOCK_CFG.export.zhbg) === "warm");
+  ok("中文色板点击自动保存", await page.evaluate(()=>MOCK_CFG.export.zhbg) === "warm");
+  ok("色板选中态切换", await page.locator('#enbg-swatches .swatch.sel[data-enbg="teal"]').count() === 1
+    && await page.locator('#zhbg-swatches .swatch.sel[data-zhbg="warm"]').count() === 1);
+  await page.locator("#cfg-bilingual").uncheck({force:true});
+  await until(() => page.locator("#enbg-row").evaluate(el=>el.hidden));
+  ok("双语关：英文底色行隐藏", await page.locator("#enbg-row").evaluate(el=>el.hidden)
+    && await page.locator("#enbg-paper blockquote").evaluate(el=>getComputedStyle(el).display==="none"));
+  ok("双语关：预览标题切换", (await page.locator("#enbg-preview-cap").textContent()).includes("纯译文"));
+  await page.locator("#cfg-bilingual").check({force:true});
+  await until(() => page.locator("#enbg-paper blockquote").evaluate(el=>getComputedStyle(el).display!=="none"));
+  ok("双语开：预览英文块恢复", await page.locator("#enbg-row").evaluate(el=>!el.hidden));
+
   // 连接测试小图标：点 → mock 立即返回 → ✓
   await page.click('.conn-dot[data-conn="llm"]');
   await until(() => page.locator('.conn-dot[data-conn="llm"]').getAttribute("class").then((c) => c.includes("ok")));

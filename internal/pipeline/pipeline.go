@@ -191,16 +191,27 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 	}
 	// 预检失败（无文本层/引擎异常）不拦路，走正常流程
 
-	// [1/4] MinerU 解析（内部判定页数/体积：未超限单文件；超限分片接续）
+	// [1/4] MinerU 解析（内部判定页数/体积：未超限单文件；超限分片接续）。
+	// 解析复用守卫：归档英文 MD 与源文件、配置指纹、校准后内容哈希一致时
+	// 直接续用——立即暂停接续、重试降级等场景不再重烧 MinerU 配额；与
+	// resumableRun 的差异：不要求翻译已完成（暂停接续正是未完成场景）。
 	p.stage("解析中")
-	p.logf("MinerU 精准解析（%s 模式）…", cfg.MinerU.ModelVersion)
 	start := time.Now()
-	if err := input.check(ctx); err != nil {
-		return nil, err
-	}
-	res, err := p.parseForTask(ctx, input.Path, parseDir)
-	if err != nil {
-		return nil, err
+	var res *mineru.Result
+	parseReused := false
+	if p.reusableArchiveParse(plan) {
+		parseReused = true
+		p.logf("归档英文 MD 与源文件/配置一致，跳过 MinerU 解析直接续用")
+		res = &mineru.Result{MDPath: plan.EnMDPath}
+	} else {
+		p.logf("MinerU 精准解析（%s 模式）…", cfg.MinerU.ModelVersion)
+		if err := input.check(ctx); err != nil {
+			return nil, err
+		}
+		res, err = p.parseForTask(ctx, input.Path, parseDir)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := input.check(ctx); err != nil {
 		return nil, err
@@ -209,15 +220,17 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 
 	// 校准会原地改写解析产物；先在结果目录留一份未校准底稿（full.raw.md），
 	// 供重试排查与人工审计——原稿此前被覆盖后无据可查。备份失败不拦路。
-	if cfg.Repair.Spelling || cfg.Repair.Symbols {
+	// 解析复用时归档件已是校准后产物（哈希守卫保证），无需再备份/校准
+	if (cfg.Repair.Spelling || cfg.Repair.Symbols) && !parseReused {
 		if err := copyFileContext(ctx, res.MDPath, filepath.Join(filepath.Dir(res.MDPath), "full.raw.md")); err != nil {
 			p.warnf("解析底稿备份失败（继续校准）：%v", err)
 		}
 	}
 
 	// [1.5/4] 校准（复用预检抽取的文本层；预检未取到时再抽一次）。
-	// 符号修复与词级拼写校准是两个独立开关，全关则连文本层都不必抽
-	if cfg.Repair.Spelling || cfg.Repair.Symbols {
+	// 符号修复与词级拼写校准是两个独立开关，全关则连文本层都不必抽；
+	// 解析复用时归档件已是校准后产物，一并跳过（避免二次校准）
+	if (cfg.Repair.Spelling || cfg.Repair.Symbols) && !parseReused {
 		p.stage("拼写校准")
 		if strings.TrimSpace(srcText) == "" {
 			if text, err := pdftext.ExtractText(input.Path); err == nil {
@@ -265,15 +278,19 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 		return nil, err
 	}
 	renderDir := filepath.Dir(zhMD)
-	if plan != nil {
+	// 归档：英文原件拷入 02（连同其旁 images/），图片同时拷给 03 供相对
+	// 链接。解析复用时产物已在归档位，跳过拷贝防自写。
+	if plan == nil {
+		if err := archiveResources(ctx, res.MDPath, renderDir); err != nil {
+			return nil, err
+		}
+	} else if !parseReused {
 		if err := copyFileContext(ctx, res.MDPath, plan.EnMDPath); err != nil {
 			return nil, fmt.Errorf("归档英文 MD: %w", err)
 		}
 		if err := archiveResources(ctx, res.MDPath, plan.EnMDDir, plan.ZhMDDir); err != nil {
 			return nil, err
 		}
-	} else if err := archiveResources(ctx, res.MDPath, renderDir); err != nil {
-		return nil, err
 	}
 	if err := p.finishRun(ctx, pdfPath, res.MDPath, zhMD, plan, tr); err != nil {
 		return nil, err
@@ -512,16 +529,17 @@ func (p *Pipeline) ExportMDPlan(ctx context.Context, mdPath string, plan *Archiv
 // 排版导出归档译文，不再重烧 MinerU / LLM 配额。图片相对链接用归档目录
 // 解析（03_zh_md/images 在翻译完成后即已同步）。
 // 返回值三态：
-//   - attempted=false：守卫未过（原因已写日志），调用方回退全流程；
-//   - (res, true, nil)：已短路导出成功；
-//   - (nil, true, err)：短路导出本身失败——多为确定性错误（KaTeX/Edge），
+//   - attempted=false：守卫未过（原因经 reason 返回并写日志），调用方回退全流程；
+//   - (res, true, "", nil)：已短路导出成功；
+//   - (nil, true, "", err)：短路导出本身失败——多为确定性错误（KaTeX/Edge），
 //     自动回退全流程只会白烧配额，调用方应按任务失败处理；
 //     用户可删除归档 03_zh_md 译文后重试来强制全流程。
-func (p *Pipeline) ResumeExport(ctx context.Context, plan *ArchivePlan) (*Result, bool, error) {
+// reason 仅供 attempted=false 时透出到任务卡片（用户可读的守卫未过原因）。
+func (p *Pipeline) ResumeExport(ctx context.Context, plan *ArchivePlan) (*Result, bool, string, error) {
 	m, checkErr := p.resumableRun(plan)
 	if checkErr != nil {
 		p.logf("仅重试导出未生效（%v），走全流程", checkErr)
-		return nil, false, nil
+		return nil, false, checkErr.Error(), nil
 	}
 	doneCount := m.Done
 	p.logf("检测到上次翻译已完成（%d 段），跳过解析与翻译，直接排版导出", doneCount)
@@ -529,12 +547,12 @@ func (p *Pipeline) ResumeExport(ctx context.Context, plan *ArchivePlan) (*Result
 	finalPath, err := p.export(ctx, zhTarget{MDPath: plan.ZhMDPath, Dir: plan.ZhMDDir, Title: title},
 		plan.ZhPDFPath, p.Cfg.Export.TOC, p.Cfg.Export.TwoColumn)
 	if err != nil {
-		return nil, true, fmt.Errorf("仅重试导出失败: %w（如需全流程重译，删除归档 03_zh_md 中的译文后重试）", err)
+		return nil, true, "", fmt.Errorf("仅重试导出失败: %w（如需全流程重译，删除归档 03_zh_md 中的译文后重试）", err)
 	}
 	return &Result{
 		OutPDF: finalPath, ZHMD: plan.ZhMDPath, WorkDir: plan.Dir,
 		Total: m.Total, Done: doneCount, KeptReferences: m.References,
-	}, true, nil
+	}, true, "", nil
 }
 
 type translateOutcome struct {
@@ -610,6 +628,8 @@ func (p *Pipeline) export(ctx context.Context, t zhTarget, outPDF string, useTOC
 		Title:       t.Title,
 		FontCSS:     fontStack(cfg),
 		UserFontCSS: userFontCSS(cfg),
+		EnBg:        cfg.Export.EnBg,
+		ZhBg:        cfg.Export.ZhBg,
 		TOC:         useTOC,
 		TwoColumn:   useTwo,
 	})

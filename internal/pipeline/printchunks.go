@@ -112,6 +112,8 @@ func (p *Pipeline) chunkedExport(ctx context.Context, mdBytes []byte, t zhTarget
 			Title:       t.Title,
 			FontCSS:     fontStack(cfg),
 			UserFontCSS: userFontCSS(cfg),
+			EnBg:        cfg.Export.EnBg,
+			ZhBg:        cfg.Export.ZhBg,
 			TOC:         useTOC && i == 0,
 			TwoColumn:   useTwo,
 		})
