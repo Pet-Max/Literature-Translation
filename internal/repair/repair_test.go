@@ -180,17 +180,20 @@ func TestCalibrateContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// "of-diagonal" 不再修复：功能词源词一律不替换（of→off 的放行通道
+	// 同样会产出 of→ofy、and→andv 类垃圾，证据权衡后整体关停），真词
+	// 损伤修复保留非功能词形态（over→offer、yields→fields）
 	want := "quasiprobability approaches offer a natural framework. " +
 		"engineered via controlled driving fields. " +
 		"This yields the matrix-element identity. " +
 		"A nonzero correction quantities the deviation from the classical symmetry relation. " +
-		"The off-diagonal elements are parametrized. " +
+		"The of-diagonal elements are parametrized. " +
 		"the proposed scheme offers a realistic route."
 	if got.Text != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got.Text, want)
 	}
-	if got.Stats.Ctx != 3 || got.Stats.Merged != 1 {
-		t.Errorf("Ctx = %d, Merged = %d, want 3/1 (details: %v)", got.Stats.Ctx, got.Stats.Merged, got.Stats.Details)
+	if got.Stats.Ctx != 2 || got.Stats.Merged != 1 {
+		t.Errorf("Ctx = %d, Merged = %d, want 2/1 (details: %v)", got.Stats.Ctx, got.Stats.Merged, got.Stats.Details)
 	}
 }
 
@@ -391,21 +394,27 @@ func TestTableConvert(t *testing.T) {
 }
 
 func TestLocalContextRepair(t *testing.T) {
-	// 局部锚定只作用于漂移区（suspect 集合）：suspect 内的 of→off 修复，
-	// 健康区的 of/合法词一律不动（首版全文放开误伤 1.9 万处）
-	orig := "the behavior of the off-diagonal elements matters here"
-	text := "the behavior of the of-diagonal elements matters here"
+	// 局部锚定只作用于漂移区（suspect 集合）：suspect 内的 Cornwal→Cornwall
+	// 修复，健康区一律不动（首版全文放开误伤 1.9 万处）。功能词源词即便
+	// 在漂移区也不替换——PDF 文本层的符号碎片经词表放行的误改（of→ofy、
+	// and→andv 类）远多于 of→off 类真修复，随证据关停
+	orig := "the behavior of the Cornwall records and the off-diagonal terms matters here"
+	text := "the behavior of the Cornwal records and the of-diagonal terms matters here"
 	vocab := BuildVocab(orig)
 	suspect := map[int]bool{}
 	for k, l := range alignWordRe.FindAllStringIndex(text, -1) {
-		if text[l[0]:l[1]] == "of" {
+		switch strings.ToLower(text[l[0]:l[1]]) {
+		case "cornwal", "of":
 			suspect[k] = true
 		}
 	}
 	var st Stats
 	got := localContextRepair(text, orig, vocab, &st, suspect)
-	if !strings.Contains(got, "off-diagonal") {
+	if !strings.Contains(got, "Cornwall records") {
 		t.Errorf("漂移区未修复: %q", got)
+	}
+	if strings.Contains(got, "off-diagonal") {
+		t.Errorf("功能词源词不得替换: %q", got)
 	}
 	if st.Ctx != 1 {
 		t.Errorf("Ctx = %d, want 1 (details: %v)", st.Ctx, st.Details)

@@ -9,13 +9,18 @@ import (
 // hyphenBreakRe 行尾连字符断行（"differ-\nent" 或悬挂式 "short-\nand"）。
 var hyphenBreakRe = regexp.MustCompile(`(?m)([A-Za-z]{2,})-\r?\n([a-z]{2,})`)
 
-// functionWords 常见功能词：行尾连字符后跟功能词，几乎总是悬挂连字符
-// （"short-\nand" 即 "short- and"），应保持两词分离；跟其他内容则是断词
-// （"configura-\ntion"→configuration、"differ-\nent"→different），应接回。
+// functionWords 常见功能词，两处使用：
+//   - 行尾连字符判定：连字符后跟功能词几乎总是悬挂连字符（"short-\nand"
+//     即 "short- and"），应保持两词分离；跟其他内容则是断词
+//     （"configura-\ntion"→configuration、"differ-\nent"→different），应接回。
+//   - 上下文锚定功能词闸（context.go）：功能词不做真词替换——PDF 文本层
+//     里的两字母符号（BN/Ni/Hf/ii）经词表放行，会把 and/of/for 类功能词
+//     改成符号碎片。
 var functionWords = map[string]struct{}{
 	"and": {}, "or": {}, "the": {}, "of": {}, "to": {}, "in": {}, "a": {},
 	"an": {}, "with": {}, "for": {}, "on": {}, "at": {}, "by": {}, "from": {},
 	"is": {}, "are": {}, "was": {}, "were": {}, "not": {}, "but": {}, "as": {},
+	"be":  {},
 	"its": {}, "this": {}, "that": {}, "these": {}, "those": {},
 }
 

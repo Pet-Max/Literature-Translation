@@ -3,6 +3,7 @@ package repair
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -49,12 +50,13 @@ func localContextRepair(text, orig string, vocab map[string]struct{}, st *Stats,
 				continue
 			}
 			// 功能词闸与最短闸：漂移区里 "the→this"、"and→qd" 类误配
-			// 全靠这两条拦下；of→off 这类真损伤（功能词 W、编辑距离 1、
-			// 候选 ≥4 字母且非功能词）放行
+			// 全靠这两条拦下。功能词源词一律不再替换——曾对编辑距离恰为
+			// 1 放行（of→off 类真损伤），实测同一通道同样会产出 of→ofy、
+			// and→andv、is→iis 等垃圾，垃圾远多于真修复，整体关停
 			if _, cFunc := functionWords[c]; cFunc || len(c) < 3 {
 				continue
 			}
-			if _, wFunc := functionWords[w]; wFunc && dist(w, c) != 1 {
+			if _, wFunc := functionWords[w]; wFunc {
 				continue
 			}
 			if cand == "" {
@@ -69,13 +71,26 @@ func localContextRepair(text, orig string, vocab map[string]struct{}, st *Stats,
 		}
 	}
 	// 对称互改对互斥：同文档里既有 w→c 又有 c→w（coherent↔incoherent、
-	// transition↔transitions），说明漂移区词序已乱，两向都放弃
-	for i, c := range rep {
-		for j, c2 := range rep {
-			if i != j && c2 == tok[i] && c == tok[j] {
-				delete(rep, i)
-				delete(rep, j)
+	// transition↔transitions），说明漂移区词序已乱，两向都放弃。
+	// 遍历前先收集键并排序：一边 range 一边 delete 的结果随 map 遍历
+	// 顺序漂移（同一输入两次运行修正集不同，实测 280/287），必须确定化。
+	keys := make([]int, 0, len(rep))
+	for k := range rep {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	for _, i := range keys {
+		c, ok := rep[i]
+		if !ok {
+			continue // 已被先前的互斥对删除
+		}
+		for _, j := range keys {
+			c2, ok := rep[j]
+			if !ok || i == j || c2 != tok[i] || c != tok[j] {
+				continue
 			}
+			delete(rep, i)
+			delete(rep, j)
 		}
 	}
 	if len(rep) == 0 {
@@ -97,45 +112,6 @@ func localContextRepair(text, orig string, vocab map[string]struct{}, st *Stats,
 	}
 	out.WriteString(text[last:])
 	return out.String()
-}
-
-// dist 编辑距离恰好为 1（含长度差 1 的插入/删除与等长替换）。
-func dist(a, b string) int {
-	la, lb := len(a), len(b)
-	if la == lb {
-		d := 0
-		for k := 0; k < la; k++ {
-			if a[k] != b[k] {
-				d++
-			}
-		}
-		return d
-	}
-	if la > lb {
-		a, b, la, lb = b, a, lb, la
-	}
-	// lb = la+1：双指针一次判插入
-	i, j := 0, 0
-	skipped := false
-	for i < la && j < lb {
-		if a[i] == b[j] {
-			i++
-			j++
-			continue
-		}
-		if skipped {
-			return 2
-		}
-		skipped = true
-		j++
-	}
-	if !skipped {
-		return 1
-	}
-	if la-i <= lb-j {
-		return 1
-	}
-	return 2
 }
 
 // ---------------------------------------------------------------- 上下文锚定
@@ -198,7 +174,19 @@ func anchorRepair(text, orig string, vocab map[string]struct{}, st *Stats) (stri
 			w := mdTok[i]
 			cand, ambiguous := "", false
 			for _, c := range orgTok[j : j+b] {
-				if c == w || len(c) < 2 || blockedTarget(c) {
+				if c == w || len(c) < 3 || blockedTarget(c) {
+					continue
+				}
+				// 功能词闸对齐 localContextRepair：PDF 文本层里的两字母
+				// 物理符号（BN/Ni/Hf/ii）都在词表里，没有这道闸会把
+				// and/of/for 类功能词改成符号碎片（一本书实测约 70 处）。
+				// 功能词源词一律不再替换——曾对编辑距离恰为 1 放行（of→off
+				// 类真损伤），实测同一通道同样会产出 of→ofy、and→andv、
+				// is→iis 等垃圾，垃圾远多于真修复，整体关停
+				if _, cFunc := functionWords[c]; cFunc {
+					continue
+				}
+				if _, wFunc := functionWords[w]; wFunc {
 					continue
 				}
 				if _, ok := vocab[c]; !ok || !distLE2(w, c) {

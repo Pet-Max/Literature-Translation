@@ -216,7 +216,6 @@ func (p *Pipeline) parseOversized(ctx context.Context, pdfPath string, pages int
 		if probeOK {
 			saveSplitPlan(parseDir, srcHash, cuts)
 		}
-		saveSplitPlan(parseDir, srcHash, cuts)
 	}
 
 	partsDir := filepath.Join(parseDir, "parts")

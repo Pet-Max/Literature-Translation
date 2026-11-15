@@ -156,3 +156,60 @@ func TestRetryCapturesExportStage(t *testing.T) {
 		})
 	}
 }
+
+// TestQueuePersistRoundTrip 状态节点落盘 + 启动恢复：Add/跑完触发回调，
+// 恢复时非终态重置为等待、终态连同「排版中」Stage 原样保留（重试仍可
+// 走仅重导出短路）。
+func TestQueuePersistRoundTrip(t *testing.T) {
+	q := NewTaskQueue(func(*Task) error { return nil })
+	var saved [][]Task
+	var mu sync.Mutex
+	q.onPersist = func(tasks []Task) {
+		mu.Lock()
+		saved = append(saved, tasks)
+		mu.Unlock()
+	}
+	if _, err := q.Add("pdf", "D:/books/en.pdf", "auto"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	n := len(saved)
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("入队应落盘一次，got %d", n)
+	}
+
+	// 终态任务：失败于「排版中」；进行中任务：翻译中
+	q.mu.Lock()
+	q.tasks[0].Status = StatusFailed
+	q.tasks[0].Stage = string(StatusRendering)
+	failed := *q.tasks[0]
+	q.tasks = append(q.tasks, &Task{ID: "T2", Code: "B2", Kind: "pdf",
+		Status: StatusTranslating, Stage: "翻译中", SourcePath: "D:/books/other.pdf"})
+	q.mu.Unlock()
+
+	q.loadTasks([]Task{failed,
+		Task{ID: "T2", Code: "B2", Kind: "pdf", Status: StatusTranslating,
+			Stage: "翻译中", SourcePath: "D:/books/other.pdf"}})
+	got := q.List()
+	if len(got) != 2 {
+		t.Fatalf("应恢复 2 个任务，got %d", len(got))
+	}
+	if got[0].Status != StatusFailed || got[0].Stage != string(StatusRendering) {
+		t.Fatalf("终态任务应原样保留: %+v", got[0])
+	}
+	if got[1].Status != StatusPending || got[1].Err != "" {
+		t.Fatalf("非终态任务应重置为等待: %+v", got[1])
+	}
+	if got[1].Stage != "翻译中" {
+		t.Fatalf("非终态任务的 Stage 应保留: %+v", got[1])
+	}
+
+	// Retry 重算仅重导出标记：失败于「排版中」→ 短路
+	if _, err := q.Retry(got[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if !q.List()[0].ResumeExport {
+		t.Fatal("失败于排版中的任务重试应置位 ResumeExport")
+	}
+}

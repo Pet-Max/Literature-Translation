@@ -207,6 +207,14 @@ func (p *Pipeline) RunPDF(ctx context.Context, pdfPath, outDirOverride string, p
 	}
 	p.logf("解析完成，用时 %s：%s", time.Since(start).Round(time.Second), res.MDPath)
 
+	// 校准会原地改写解析产物；先在结果目录留一份未校准底稿（full.raw.md），
+	// 供重试排查与人工审计——原稿此前被覆盖后无据可查。备份失败不拦路。
+	if cfg.Repair.Spelling || cfg.Repair.Symbols {
+		if err := copyFileContext(ctx, res.MDPath, filepath.Join(filepath.Dir(res.MDPath), "full.raw.md")); err != nil {
+			p.warnf("解析底稿备份失败（继续校准）：%v", err)
+		}
+	}
+
 	// [1.5/4] 校准（复用预检抽取的文本层；预检未取到时再抽一次）。
 	// 符号修复与词级拼写校准是两个独立开关，全关则连文本层都不必抽
 	if cfg.Repair.Spelling || cfg.Repair.Symbols {
@@ -581,9 +589,10 @@ type zhTarget struct {
 	Title  string // 文档标题（无一级标题时的回退）
 }
 
-// export 排版渲染 + Edge 打印。中间产物 final.html 写入系统临时目录，
-// 通过 /__final 内存路由提供服务——不再污染用户的文档文件夹。
-// 超时派生自任务 ctx（此前用 Background，任务取消拦不住导出）。
+// export 排版渲染 + Edge 打印。渲染结果经 /__final 内存路由提供给无头
+// 浏览器，不落盘、不污染用户的文档文件夹。预算 15 分钟 = 整本直出 6 分钟
+// + 分段打印回退余量；超时派生自任务 ctx（此前用 Background，任务取消
+// 拦不住导出）。
 func (p *Pipeline) export(ctx context.Context, t zhTarget, outPDF string, useTOC, useTwo bool) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -620,30 +629,22 @@ func (p *Pipeline) export(ctx context.Context, t zhTarget, outPDF string, useTOC
 			buildStats.Affected, total, strings.Join(parts, "、"))
 	}
 	p.logf("排版渲染完成，Edge 打印 PDF …")
-	// 10 分钟预算按大文档实情放宽：600+ 页书打印实测需 4-5 分钟（与
-	// pdf.go 的打印限时对齐），原 6 分钟会把合格成品误判为超时
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	// 15 分钟预算 = 整本直出 6 分钟 + 分段打印回退余量（回退仅在直出
+	// 规模类失败时启动，见 printchunks.go）
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 	fontsDir := p.fontsDir
 	if fontsDir == "" {
 		fontsDir, _ = fonts.Dir()
 	}
-	// 浏览器启动类故障（Edge 后台更新换版、被安全软件瞬时拦截、内存吃紧等）
-	// 过几秒重开一次通常就能恢复，自动重试；KaTeX/打印/写盘类错误是确定性的，
-	// 不重试，避免白等。打印本身幂等，重试零风险。
+	// 浏览器启动类故障在 printWithRetry 里自动重试；整本直出的打印规模
+	// 类失败（生成崩溃/超时）转分段打印回退——同一内容分段渲染打印
+	// 实测稳定（920 页书 4 段、每段数十秒），直出换多大预算都出不来
 	var finalPath string
-	for attempt := 1; ; attempt++ {
-		finalPath, err = export.PrintPDF(ctx, t.Dir, htmlDoc, outPDF, fontsDir,
-			func(msg string) { p.warnf("%s", msg) })
-		if err == nil || attempt >= 3 || !isBrowserLaunchErr(err) {
-			break
-		}
-		p.logf("浏览器未起来（第 %d 次）：%v —— 5 秒后重试", attempt, err)
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(5 * time.Second):
-		}
+	finalPath, err = p.printWithRetry(ctx, t.Dir, htmlDoc, outPDF, fontsDir)
+	if err != nil && export.IsPrintScaleErr(err) && len(mdBytes) >= chunkMinBytes {
+		p.warnf("整本打印未成功（%v）——改用分段打印合并", err)
+		finalPath, err = p.chunkedExport(ctx, mdBytes, t, outPDF, cfg, useTOC, useTwo, fontsDir, htmlDoc)
 	}
 	if err != nil {
 		return "", err
@@ -657,7 +658,8 @@ func (p *Pipeline) export(ctx context.Context, t zhTarget, outPDF string, useTOC
 
 // isBrowserLaunchErr 识别无头浏览器启动阶段的瞬时故障：进程未及打印
 // DevTools 端点就退出（chrome failed to start），或 20 秒内没等到端点
-// （websocket url timeout reached）。文案来自 chromedp，升级其版本时需留意。
+// （websocket url timeout reached）。错误文案与 chromedp 版本耦合，
+// 升级其版本时需核对。
 func isBrowserLaunchErr(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "chrome failed to start") ||

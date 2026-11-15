@@ -161,9 +161,10 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 	defer cancelAlloc()
 	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
 	defer cancelBrowser()
-	// 整个打印限时 9 分钟（大文档的字体加载+公式渲染+打印确实耗时——
-	// 606 页书的打印实测需 4-5 分钟，300 秒上限会把合格成品误判为超时）
-	runCtx, cancelRun := context.WithTimeout(browserCtx, 540*time.Second)
+	// 整本直出限时 6 分钟（已知成功样本 4-5 分钟）。超限即视为整本打印
+	// 规模类失败，由调用方（pipeline.export）走分段打印回退——再长的
+	// 预算也只会白等，920 页书在部分机器状态下整本直出永远出不来。
+	runCtx, cancelRun := context.WithTimeout(browserCtx, 6*time.Minute)
 	defer cancelRun()
 
 	var ktxStatsJSON string
@@ -250,9 +251,10 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 		}),
 	)
 	if err != nil {
-		// 打印超时单独说明（避免漏出英文的 context deadline exceeded）
+		// 打印超时单独说明（避免漏出英文的 context deadline exceeded）；
+		// 包裹 %w 供 IsPrintScaleErr 分类，触发调用方的分段打印回退
 		if errors.Is(err, context.DeadlineExceeded) {
-			return written, fmt.Errorf("PDF 打印超时（9 分钟）：文档较大或公式较多时可能发生，可重试")
+			return written, fmt.Errorf("PDF 打印超时（6 分钟）：文档较大或公式较多时可能发生（%w）", err)
 		}
 		// 启动类错误（chrome failed to start）已由 chromedp 自带浏览器输出；
 		// 其余错误（轮询超时、打印失败等）的浏览器输出本会被丢弃，这里补上，
@@ -262,4 +264,16 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 		}
 	}
 	return written, err
+}
+
+// IsPrintScaleErr 判定是否为「整本文档打印规模类」失败：打印生成阶段
+// 崩溃（Chromium -32000 Printing failed，落在「打印 PDF 失败」前缀里）
+// 或整本直出超时。这类失败换多大的预算都出不来，应由调用方切分段落
+// 分批打印再合并；浏览器启动类瞬时故障不属此列（另有自动重试）。
+func IsPrintScaleErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, context.DeadlineExceeded) ||
+		strings.Contains(err.Error(), "打印 PDF 失败")
 }

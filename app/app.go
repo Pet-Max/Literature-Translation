@@ -43,6 +43,10 @@ type App struct {
 	queue         *TaskQueue
 	logBuffer     []LogLine // 环形保留最近 500 条
 	logMu         sync.Mutex
+	// 任务队列落盘（F6）：状态节点回调注入队列，2 秒去抖写盘，退出强制刷
+	qPersistMu  sync.Mutex
+	qPending    []Task
+	qFlushTimer *time.Timer
 }
 
 // LogLine 日志页的一条记录。
@@ -71,6 +75,8 @@ func (a *App) Startup(ctx context.Context) {
 	a.cleanupLegacyWebviewData()
 	a.queue = NewTaskQueue(a.runTaskSafe)
 	a.queue.onIdle = a.afterQueueChange
+	a.queue.onPersist = a.persistQueueAsync
+	a.restoreQueue()
 	a.pl, _ = a.newPipeline()
 	a.pushLog("info", "应用就绪")
 	if loadErr != nil {
@@ -140,8 +146,11 @@ func (a *App) newPipeline() (*pipeline.Pipeline, error) {
 	})
 }
 
-// Shutdown 退出钩子。
-func (a *App) Shutdown(ctx context.Context) { a.stopQueue() }
+// Shutdown 退出钩子：停队列后强制刷盘任务列表（重启后原样恢复）。
+func (a *App) Shutdown(ctx context.Context) {
+	a.stopQueue()
+	a.flushQueueNow()
+}
 
 func (a *App) stopQueue() {
 	if a.queueCancel != nil {
@@ -150,6 +159,98 @@ func (a *App) stopQueue() {
 	if a.workerDone != nil {
 		<-a.workerDone
 	}
+}
+
+// ---------------------------------------------------------------- 任务队列落盘
+
+// queuePath 任务列表落盘文件（与 config.json 同目录）。
+func queuePath() string {
+	p, err := config.Path()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(p), "queue.json")
+}
+
+// persistQueueAsync 队列变更回调（TaskQueue 注入）：2 秒去抖写盘。
+// 进度事件不触发落盘（只在 Add/Retry/Remove/清理/跑完等状态节点回调），
+// 去抖只为兜住短时间内的连续状态节点。
+func (a *App) persistQueueAsync(tasks []Task) {
+	path := queuePath()
+	if path == "" {
+		return
+	}
+	a.qPersistMu.Lock()
+	a.qPending = tasks
+	if a.qFlushTimer == nil {
+		a.qFlushTimer = time.AfterFunc(2*time.Second, a.flushQueueNow)
+	}
+	a.qPersistMu.Unlock()
+}
+
+// flushQueueNow 立即写盘（去抖到期或退出时调用）。
+func (a *App) flushQueueNow() {
+	a.qPersistMu.Lock()
+	defer a.qPersistMu.Unlock()
+	if a.qFlushTimer != nil {
+		a.qFlushTimer.Stop()
+		a.qFlushTimer = nil
+	}
+	if a.qPending == nil {
+		return
+	}
+	path := queuePath()
+	if path == "" {
+		return
+	}
+	data, err := json.MarshalIndent(a.qPending, "", "  ")
+	if err != nil {
+		return
+	}
+	// 临时文件 + 原子改名：写一半崩溃不损毁队列
+	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".queue-*")
+	if err != nil {
+		return
+	}
+	tmp := f.Name()
+	if _, err = f.Write(data); err == nil {
+		err = f.Close()
+	} else {
+		f.Close()
+	}
+	if err == nil {
+		if err = os.Rename(tmp, path); err != nil && os.Remove(tmp) != nil {
+			// 改名失败且清理失败：留待下次落盘覆盖
+		}
+	}
+	if err == nil {
+		a.qPending = nil // 已持久化，清空待写快照
+	}
+}
+
+// restoreQueue 启动时从 queue.json 恢复任务列表（重置语义在
+// TaskQueue.loadTasks：非终态重置为等待，终态原样保留）。
+func (a *App) restoreQueue() {
+	path := queuePath()
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return // 首次运行没有队列文件
+	}
+	var tasks []Task
+	if json.Unmarshal(data, &tasks) != nil {
+		a.pushLog("warn", "任务队列文件损坏，已忽略（下次变更会重建）")
+		return
+	}
+	if len(tasks) > 0 {
+		a.pushLog("info", "已恢复上次任务列表")
+	}
+	a.queue.loadTasks(tasks)
 }
 
 // BeforeClose waits for the frontend's pending settings before normal shutdown.

@@ -25,13 +25,15 @@
 ## 主要功能
 
 - **智能路由**：按语言自动分流——英文 PDF 全流程、英文 MD 直接翻译、中文 MD 仅导出、中文 PDF 秒拒
+- **分片接续**：超限 PDF 自动切块并行解析、无缝合并为一份连续译文
 - **解析校准**：以原 PDF 文本层为参照，自动修复解析损伤（符号、拼写、真词、重音符、控制码、数学伪影、上下标）；HTML 表格自动转 Markdown，可离线重跑
 - **公式零损伤**：公式整体冻结、原样保留，机械校验不合格自动重试；公式横线贴近 LaTeX 印刷粗细
 - **规则与术语**：内置「物理」与「通用学术」双预设，多套规则可编辑切换；术语表统一译名
 - **双语对照**：译文段落后附原文，方便核对
 - **断点续跑**：译文即时落盘，中断重跑自动跳过已完成段
+- **大文档可靠导出**：整本打印失败自动分段打印合并；个别公式解析失败红字保留，不中断任务
 - **文献归档**：每篇一个档案夹，四类产物与过程文件全保留——`01_en_pdf` 原文 PDF · `02_en_md` 英文 MD · `03_zh_md` 中文 MD · `04_zh_pdf` 成品
-- **自动保存**：设置改动即时落盘，关闭窗口前自动收尾未保存的修改
+- **自动保存**：设置与任务列表即时落盘，重启后自动恢复（未完成的回到待开始）
 - **字体与主题**：三套字体方案（文楷内嵌）+ 自定义导入；浅深双主题一键切换
 
 ## 快速开始
@@ -69,7 +71,7 @@ scripts\build.bat
 1. 启动应用，进入「设置 → 服务连接」
 2. 填入 MinerU API Token（点「前往 API 管理 ↗」直达获取页）
 3. 填入 LLM 模型 API 地址、API Key、模型名（可点「拉取模型」从上游列表选择）
-4. 点输入框右侧 ⇄ 图标测试连通，两个 ✓ 就绪
+4. 点凭据右侧的小图标测试连接，两个 ✓ 就绪
 5. 改动自动保存——卡片右上角出现 ✓ 已保存即生效
 
 ### 使用
@@ -101,7 +103,7 @@ scripts\build.bat
 - **双击 exe 后没有任何反应？** 大概率缺 WebView2 运行时（精简系统/LTSC 常见）。运行[依赖检测脚本](scripts/depscheck.bat)确认，或直接安装 [在线引导安装器](https://go.microsoft.com/fwlink/p/?LinkId=2124703)（约 2MB，需联网）；无网环境用 [离线 X64 包](https://go.microsoft.com/fwlink/?linkid=2124701)。装完无需重启，重新打开应用即可。若检测脚本提示「主文件缺失」，重新运行引导安装器覆盖修复即可。
 - **提示找不到 Edge 或 Chrome？** 导出 PDF 依赖 Edge（Win10/11 内置）或 Chrome 任一，仅影响导出，其他功能不受影响。检测到 Chrome 时导出自动改用 Chrome，无需安装；两者皆无时，可运行[依赖检测脚本](scripts/depscheck.bat)确认，或[安装 Edge](https://www.microsoft.com/edge/download)，无需任何配置。
 - **翻译引擎报错？** 翻译引擎内置于应用内；若报 LLM 相关错误，先检查设置页的 LLM 地址/Key/模型名。
-- **MinerU 报 Token 无效 / A0202？** 到 [mineru.net「API 管理」](https://mineru.net/apiManage/token)重新生成 Token，回设置页粘贴后点输入框右侧 ⇄ 重测。
+- **MinerU 报 Token 无效 / A0202？** 到 [mineru.net「API 管理」](https://mineru.net/apiManage/token)重新生成 Token，回设置页粘贴后点凭据旁的小图标重测。
 - **翻译卡住或某段失败？** 先看「日志」视图——解析、重试、导出的全过程都在。个别段最终失败会保留英文原文并标注，处理完直接重跑，自动断点续译。
 
 ## 隐私与安全
@@ -141,7 +143,7 @@ literature-translation font add|list|use|remove    # 字体管理
 
 - **改前端**：直接编辑 `frontend/dist/` 前端源码文件，无构建步骤；改完 `scripts\build.bat` 重新打包（前端经 embed 进 exe）
 - **打包分发**：`scripts\package.bat` 产出两种分发物到 `build\bin\`——`Literature-Translation-Setup-vX.Y.Z-windows-amd64.exe`（安装版）与 `Literature-Translation-vX.Y.Z-windows-amd64-portable.zip`（便携版），载荷 = 主 exe + LICENSE，两版同源
-- **一键体检**：`scripts\check.bat`（vet / workflow lint / go test 含管线 E2E / 前端 E2E），全部本地运行，不需要真实 LLM Key 与 MinerU 配额；覆盖语言路由、归档方案、字体校验、公式冻结/解冻、PDF 文本抽取、解析校准全链路、断点续跑、前端交互与主题
+- **一键体检**：`scripts\check.bat`（vet / workflow lint / go test 含管线 E2E / 前端 E2E），全部本地运行，不需要真实 LLM Key 与 MinerU 配额；覆盖语言路由、归档方案、字体校验、公式冻结/解冻、PDF 文本抽取、解析校准全链路、分片接续、断点续跑、分段打印回退、队列持久化、前端交互与主题
 - **单独跑的两项**：模糊测试 `go test ./internal/pipeline -fuzz FuzzNewArchivePlan -fuzztime 30s`（种子语料随 go test 常跑，深挖用 -fuzz）；前端组件 E2E `npm ci && node tests/e2e_frontend.mjs`（Playwright 驱动真实前端 + mock 壳，需 Chrome/Edge）
 - **欢迎 PR**：fork → 建分支 → `scripts\check.bat` 四步全绿 → 提 PR（CI 自动跑同一套门禁、不产出安装包）。约定：gofmt 零告警；新增 Go 绑定必须在 shim（`tests/gui_preview/gui_shim.js`，window.go 的 mock，由 `tests/overlay_server.mjs` 注入）里加同名 mock，否则前端测试挂；归档目录常量在 `internal/pipeline/outputplan.go`，默认规则文本在 `internal/config`
 

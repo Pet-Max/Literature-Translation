@@ -52,20 +52,61 @@ var codeRe = regexp.MustCompile(`^[A-Za-z]+\d+`)
 // 手动开始模式：入队只排队不执行。Start 后按序跑完（跑完即回到待开始）；
 // StartOne 只跑指定的一篇；Pause 后当前这篇跑完即停，等待中的任务不动。
 type TaskQueue struct {
-	mu      sync.Mutex
-	tasks   []*Task
-	current *Task
-	runner  func(*Task) error
-	notify  chan struct{}
-	paused  bool
-	soloID  string        // 非空 = 单跑模式：只跑这一个任务，跑完即回到待开始
-	idSeq   atomic.Uint64 // 任务 ID 序列：防 UnixNano 同毫秒碰撞
-	onIdle  func()        // 每篇跑完后的回调（App 用于推送队列状态变化）
+	mu        sync.Mutex
+	tasks     []*Task
+	current   *Task
+	runner    func(*Task) error
+	notify    chan struct{}
+	paused    bool
+	soloID    string        // 非空 = 单跑模式：只跑这一个任务，跑完即回到待开始
+	idSeq     atomic.Uint64 // 任务 ID 序列：防 UnixNano 同毫秒碰撞
+	onIdle    func()        // 每篇跑完后的回调（App 用于推送队列状态变化）
+	onPersist func([]Task)  // 队列状态节点回调（App 落盘 queue.json；锁外调用）
 }
 
 // NewTaskQueue 创建队列（调用 Worker 启动处理循环）。初始为待开始态。
 func NewTaskQueue(runner func(*Task) error) *TaskQueue {
 	return &TaskQueue{runner: runner, notify: make(chan struct{}, 8), paused: true}
+}
+
+// persist 状态节点落盘：把当前列表快照交给 App（锁外执行）。进度事件
+// 不落盘——只在入队/重排/移除/清理/单篇跑完这些状态节点调用。
+func (q *TaskQueue) persist() {
+	if q.onPersist != nil {
+		q.onPersist(q.List())
+	}
+}
+
+// loadTasks 启动时恢复落盘的任务列表（仅 Startup 调用一次）。非终态任务
+// （含应用关闭时正在跑的）一律重置为等待——恢复的语义是「任务还在，等
+// 你点开始」，不是「接着自动跑」；终态连同「排版中」Stage 原样保留，
+// 重试仍能走仅重导出短路（守卫在 pipeline.ResumeExport）。ResumeExport
+// 为瞬态标记（json:"-" 不落盘），重试时按 Stage 重新计算。
+func (q *TaskQueue) loadTasks(tasks []Task) {
+	for i := range tasks {
+		t := &tasks[i]
+		if t.Status != StatusDone && t.Status != StatusFailed {
+			t.Status = StatusPending
+			t.Err = ""
+			t.DoneIdx, t.FailedIdx, t.Sweeping = nil, nil, false
+		}
+		if t.Stage == "" {
+			t.Stage = "待开始"
+		}
+	}
+	q.setTasks(tasks)
+}
+
+// setTasks 整表替换（锁内改指针，锁外落盘）。
+func (q *TaskQueue) setTasks(tasks []Task) {
+	q.mu.Lock()
+	pts := make([]*Task, len(tasks))
+	for i := range tasks {
+		pts[i] = &tasks[i]
+	}
+	q.tasks = pts
+	q.mu.Unlock()
+	q.persist()
 }
 
 // Start 开始/继续处理队列中的等待任务（一次性触发，跑到队列为空）。
@@ -97,6 +138,7 @@ func (q *TaskQueue) StartOne(id string) error {
 	q.paused = false
 	q.soloID = id
 	q.mu.Unlock()
+	q.persist()
 	q.wake()
 	return nil
 }
@@ -155,6 +197,7 @@ func (q *TaskQueue) Add(kind, path, mode string) (Task, error) {
 	q.tasks = append(q.tasks, t)
 	snapshot := *t
 	q.mu.Unlock()
+	q.persist()
 	q.wake()
 	return snapshot, nil
 }
@@ -204,23 +247,31 @@ func (q *TaskQueue) ClearFinished() []Task {
 	}
 	q.tasks = kept
 	q.mu.Unlock()
+	q.persist()
 	q.wake()
 	return q.List()
 }
 
 // Remove 从队列移除一个等待中的任务（进行中的不可取消）。
 func (q *TaskQueue) Remove(id string) error {
+	removed := false
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	for i, t := range q.tasks {
 		if t.ID == id {
 			if t == q.current {
+				q.mu.Unlock()
 				return fmt.Errorf("任务正在处理，暂不支持取消")
 			}
 			// 等待/完成/失败均可单独移除（仅进行中不可）
 			q.tasks = append(q.tasks[:i], q.tasks[i+1:]...)
-			return nil
+			removed = true
+			break
 		}
+	}
+	q.mu.Unlock()
+	if removed {
+		q.persist()
+		return nil
 	}
 	return fmt.Errorf("任务 %s 不存在", id)
 }
@@ -257,6 +308,7 @@ func (q *TaskQueue) Retry(id string) (Task, error) {
 	t.DoneIdx, t.FailedIdx, t.Sweeping = nil, nil, false
 	snapshot := *t
 	q.mu.Unlock()
+	q.persist()
 	q.wake()
 	return snapshot, nil
 }
@@ -326,6 +378,7 @@ func (q *TaskQueue) Worker(ctx interface{ Done() <-chan struct{} }) {
 					q.paused = true
 				}
 				q.mu.Unlock()
+				q.persist()
 				if q.onIdle != nil {
 					q.onIdle()
 				}
