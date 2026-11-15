@@ -133,7 +133,7 @@ if (-not $keepNotes) {
         $lines += "* $title ($($commit.sha.Substring(0, 7)))"
         if ($title -match '\(#(\d+)\)\s*$' -or $title -match '^Merge pull request #(\d+) from') { $prTitles[[int]$Matches[1]] = $title }
     }
-    $notes = "## Changelog`n`n" + ($lines -join "`n") + "`n"
+    $notes = "## ✨ Changelog`n`n" + ($lines -join "`n") + "`n"
     $prLines = @()
     $contributors = @{}
     $owner = ($env:GITHUB_REPOSITORY -split '/')[0]
@@ -150,7 +150,7 @@ if (-not $keepNotes) {
         $notes += "`n## New Contributors`n`n"
         foreach ($user in @($contributors.Keys | Sort-Object)) { $notes += "* @$user made their first contribution in #$($contributors[$user])`n" }
     }
-    $changelog = if ($prev) { "$prev...$tag" } else { "$env:GITHUB_REPOSITORY/commits/$target" }
+    $changelog = if ($prev) { "https://github.com/$env:GITHUB_REPOSITORY/compare/$prev...$tag" } else { "https://github.com/$env:GITHUB_REPOSITORY/commits/$target" }
     $notes += "`n**Full Changelog**: $changelog"
     Set-Content -LiteralPath $notesFile -Value $notes -Encoding utf8NoBOM
 }
