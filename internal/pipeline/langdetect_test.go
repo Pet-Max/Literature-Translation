@@ -19,6 +19,11 @@ func TestCJKRatio(t *testing.T) {
 		{"中英混排双语", "功率谱密度 The power spectral density 约束了热流。", true},
 		{"只有数字符号", "123 $x^2$ 45.6 (7)", false}, // 无有效字符→0→非中文
 		{"空文本", "", false},
+		// 通用性及多语言/双语边界用例
+		{"公式与图片密集纯中文", "见图 ![fig1](images/0123456789abcdef0123456789abcdef0123456789abcdef.jpg)，其中 $\\alpha_1 + \\beta_2 = \\gamma_{eff}$ 给出精确收敛解。参考文献 J. Smith et al.", true},
+		{"双语对照译文含英文引用块", "系统满足守恒律。\n\n> The system satisfies conservation laws with precision over long interaction times in multi-qubit chains.\n\n实验验证了上述结论。", true},
+		{"日文混合汉字与假名不误拒", "量子力学における基礎方程式とシュレディンガー方程式の解析解について説明する。", false},
+		{"法文或德文纯拉丁", "Über die Elektrodynamik bewegter Körper und die Quantentheorie.", false},
 	}
 	for _, c := range cases {
 		if got := IsChineseText(c.text); got != c.want {

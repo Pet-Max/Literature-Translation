@@ -15,8 +15,8 @@ var loneInlineRe = regexp.MustCompile(`^\$([^$]+)\$$`)
 // promoteDisplayMath 把"独立成行的 $…$ 伪行间公式"升级为 $$…$$ 块。
 // MinerU 偶尔把多行 display 拆成若干单 $ 行：连续 ≥2 行的合并为一个
 // $$ 块（内容逐行保留）；孤行且内容 ≥15 字符的也提升。行内短公式、
-// 一行多个公式、代码围栏与既有 $$ 块内部一律不动。本库 75 篇实测命中
-// 0 处（公式定界符规范），此规则是给其他文献源的前瞻兜底。
+// 一行多个公式、代码围栏与既有 $$ 块内部一律不动，作为跨来源异常
+// 定界符的兜底还原规则。
 func promoteDisplayMath(md string, st *Stats) string {
 	lines := strings.Split(md, "\n")
 	out := make([]string, 0, len(lines)+8)

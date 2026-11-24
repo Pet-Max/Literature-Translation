@@ -1,12 +1,7 @@
 // extract_smoke_test.go — 抽取质量冒烟门：对仓库自带的合成示例 PDF 跑
 // pdfium 文本层抽取，断言一组稳定的内容不变量（标题锚点、节标题、文献
 // 条目、公式编号）与输出卫生（无 U+FFFE 标记、无连字码点）。
-//
-// 前身 tests/parity_test.go 是 v1.2.0 引擎 Go 化时对 Python 引擎的逐字
-// 对拍——迁移完成后其使命即告终结，且基线锚定的旧样例与 Python 引擎
-// 均已移除，测试随之退役（历史版本可从旧 tag 检索）。本文件以不依赖
-// 任何外部基线的方式接替其"抽取质量有护栏"的职责：换样例时同步更新
-// 断言即可。
+// 本测试不依赖任何外部基线，更换示例文档时同步更新对应锚点断言即可。
 package tests
 
 import (
@@ -30,7 +25,7 @@ func TestExtractSyntheticSampleSmoke(t *testing.T) {
 		t.Fatalf("抽取文本过短（%d 字符），疑似抽取失败", n)
 	}
 
-	// 输出卫生：残留码点与连字码点（承自旧对拍测试的有效检查）
+	// 输出卫生：残留码点与连字码点不得残留在抽取文本中
 	if strings.ContainsRune(goText, '\ufffe') {
 		t.Fatalf("抽取输出仍含 U+FFFE 标记")
 	}

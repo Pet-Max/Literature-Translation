@@ -73,10 +73,47 @@ func MarkdownToHTMLForTest(md string) string {
 	return markdownToHTML(md, nil)
 }
 
+func TestRenderGeneralityAndStats(t *testing.T) {
+	// 1. 空标题不生成空 <h1 class="doc-title">；无标题不生成空 <nav class="toc">
+	//    $50 to $100、$50-$100 与 $50 ($x+1$) / $5-$10 ($y+2$) 中金额部分不被误识别为公式，而 $1-2$、$x+1$、$y+2$ 保留公式属性
+	noTitleOut, noTitleSt := BuildWithStats("Only body paragraph.\n\nCosts $50 to $100, $50-$100, $50 ($x+1$) and $5-$10 ($y+2$), math $1-2$.", Options{Title: "", TOC: true})
+	if strings.Contains(noTitleOut, `class="doc-title"`) {
+		t.Fatalf("空标题不应输出 doc-title: %s", noTitleOut)
+	}
+	if strings.Contains(noTitleOut, `class="toc"`) {
+		t.Fatalf("无标题文档不应输出空目录框: %s", noTitleOut)
+	}
+	if strings.Contains(noTitleOut, `data-tex="50`) || strings.Contains(noTitleOut, `data-tex="10`) {
+		t.Fatalf("货币金额不应被渲染为公式: %s", noTitleOut)
+	}
+	for _, wantTex := range []string{`data-tex="x+1"`, `data-tex="y+2"`, `data-tex="1-2"`} {
+		if !strings.Contains(noTitleOut, wantTex) {
+			t.Fatalf("真公式 %s 应保留渲染: %s", wantTex, noTitleOut)
+		}
+	}
+	if noTitleSt.RawHTMLOmitted != 0 {
+		t.Fatalf("无原始 HTML 不应计数: %+v", noTitleSt)
+	}
+
+	// 2. NoCoverTitle=true 时保留后续分段开头的 # 章节标题在正文区，不抽离为居中封面标题
+	contOut := Build("# Chapter 3\n\nContinuation body.", Options{Title: "", NoCoverTitle: true})
+	if strings.Contains(contOut, `class="doc-title"`) {
+		t.Fatalf("NoCoverTitle=true 不应生成 doc-title: %s", contOut)
+	}
+	if !strings.Contains(contOut, `<article class="content">`+"\n"+`<h1 id="chapter-3">Chapter 3</h1>`) {
+		t.Fatalf("续段 H1 应保留在 content 内: %s", contOut)
+	}
+
+	// 3. 原始 HTML 被安全过滤时，RawHTMLOmitted 准确告警计数
+	rawHTMLDoc, rawSt := BuildWithStats("<div>raw block</div>\n\n<table><tr><td>x</td></tr></table>", Options{Title: "T"})
+	if !strings.Contains(rawHTMLDoc, "raw HTML omitted") || rawSt.RawHTMLOmitted == 0 {
+		t.Fatalf("未统计原始 HTML 过滤数: stats=%+v doc=%s", rawSt, rawHTMLDoc)
+	}
+}
+
 func TestNestedFreezeRestore(t *testing.T) {
 	// 代码围栏夹在 $$…$$ 之间：含占位符的匹配不再冻结成"公式"，
-	// 围栏按代码块还原，$$ 落为普通文本，不得出现 ⟦M⟧ 字面量泄漏
-	// （repair/render 两处同源 bug，历史全库验证曾泄漏 862 处）
+	// 围栏按代码块还原，$$ 落为普通文本，不得出现 ⟦M⟧ 字面量泄漏。
 	md := "before\n\n$$\n```\nfenced $$ inner\n```\n$$\n\nafter"
 	out := Build(md, Options{Title: "T"})
 	if strings.Contains(out, "⟦M") || strings.Contains(out, "[M1]") {

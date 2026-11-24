@@ -14,27 +14,24 @@ import (
 //  2. 等价性：只做 KaTeX 支持矩阵的等价映射、LaTeX 语法有效性最小修复、
 //     KaTeX 硬限制适配。目标不唯一的不修——例如生造词 \equivq 可能是
 //     \equiv 或 "\equiv q" 的 OCR 粘连，映射会丢字符，只能降级；
-//  3. 对拍守门：每条规则经真实语料全量回归（清洗后新增抛错必须为 0）
-//     加通用陷阱单测（\rightarrow 分词、嵌套环境、\left.、\tag{…} 内
-//     嵌花括号、环境内外的 &）。
+//  3. 回归守门：通用边界与常见语法陷阱均须由单测与模糊测试锁定
+//     （\rightarrow 分词、嵌套环境、\left.、\tag{…} 内嵌花括号、环境内外的 &）。
 //
-// 实现要点（原型验证发现的问题）：
-//   - 命令必须整词分词：\rightarrow 若被当作 \right + 定界符会误伤
-//     合法公式（曾误伤 14 条）；
+// 实现不变量：
+//   - 命令必须整词分词：\rightarrow 若被当作 \right + 定界符会误伤合法公式；
+//   - 前导反斜杠奇偶区分：\\ 为换行符，\\tag / \\normalfont 不得误判为命令；
 //   - 定界符捕获按 控制词 > 控制符号 > 单字符 顺序，\left\{ 的 \{
-//     要整体捕获，否则会剥出一个裸反斜杠；
-//   - 所有修补走「编辑列表 + 倒序应用」：扫描期坐标与改写期坐标同源，
-//     避免先改写的文本使后续坐标失效；
-//   - 花括号失衡、数组行结构损伤不在修复范围：猜测式补全在 14040 条
-//     真实公式对拍中误伤 1514 条，故改走降级。
+//     要整体捕获，且未闭合 \left/\right 不得消费后续结构命令；
+//   - 剥除空转或未闭合命令时，若前后紧邻 ASCII 字母须保留空格分隔防拼接成新命令；
+//   - 所有修补走「编辑列表 + 倒序防重叠应用」，扫描期坐标与改写期坐标同源；
+//   - 花括号失衡与复杂数组行结构损伤不在修复范围，直接交由渲染端降级显示。
 
 // TexFixStats 记清洗规则的命中明细（键=规则名，值=命中次数；一条公式
 // 可同时命中多条规则，次数与受影响公式数是两个口径）。
 type TexFixStats map[string]int
 
 // 同义映射：LaTeX 标准命令，KaTeX 未实现且目标唯一。扩展条目必须先在
-// 目标 KaTeX 版本上验证为真 Undefined（与"缺参数"类报错区分），再经
-// 语料回归与单测锁定后才能加入。
+// 目标 KaTeX 版本上验证为真 Undefined（与"缺参数"类报错区分），再补充对应单测锁定。
 var texSynonymCmds = map[string]string{
 	"hdots":         "dots",
 	"displaylimits": "limits",
@@ -86,29 +83,69 @@ func (f *texFixer) fix(tex string) string {
 }
 
 // sanitizeTex 清洗主入口。三步流水：命令级改写 → 多 \tag 收敛 →
-// 结构配对修补（编辑列表统一应用）。
+// 结构配对修补（编辑列表统一应用）；迭代至不动点以消除级联暴露（如 \end&{} → \end{} → ""），保证单次调用即幂等。
 func sanitizeTex(tex string) (string, TexFixStats) {
 	stats := TexFixStats{}
-	tex = rewriteKnownCmds(tex, stats)
-	tex = keepFirstTag(tex, stats)
-	tex = fixStructure(tex, stats)
+	for pass := 0; pass < 64; pass++ {
+		next := rewriteKnownCmds(tex, stats)
+		next = keepFirstTag(next, stats)
+		next = fixStructure(next, stats)
+		if next == tex {
+			break
+		}
+		tex = next
+	}
 	return tex, stats
 }
 
 // rewriteKnownCmds 应用同义映射与空转命令剥除。
 func rewriteKnownCmds(tex string, stats TexFixStats) string {
-	return texCmdRe.ReplaceAllStringFunc(tex, func(m string) string {
+	locs := texCmdRe.FindAllStringIndex(tex, -1)
+	if len(locs) == 0 {
+		return tex
+	}
+	var out strings.Builder
+	out.Grow(len(tex))
+	pos := 0
+	needSepAfterStrip := false
+	for _, l := range locs {
+		if l[0] > pos {
+			if needSepAfterStrip && out.Len() > 0 && isASCIILetterByte(out.String()[out.Len()-1]) && isASCIILetterByte(tex[pos]) {
+				out.WriteByte(' ')
+			}
+			out.WriteString(tex[pos:l[0]])
+			needSepAfterStrip = false
+		}
+		m := tex[l[0]:l[1]]
+		if precedingBackslashes(tex, l[0])%2 == 1 {
+			// 前紧邻 \\ 转义换行，此处为 \\ 后接普通字母而非独立 TeX 命令
+			out.WriteString(m)
+			needSepAfterStrip = false
+			pos = l[1]
+			continue
+		}
 		name := m[1:]
 		if rep, ok := texSynonymCmds[name]; ok {
 			stats["映射 \\"+name+"→\\"+rep]++
-			return "\\" + rep
-		}
-		if texNullCmds[name] {
+			out.WriteByte('\\')
+			out.WriteString(rep)
+			needSepAfterStrip = false
+		} else if texNullCmds[name] {
 			stats["剥除 \\"+name]++
-			return ""
+			needSepAfterStrip = true
+		} else {
+			out.WriteString(m)
+			needSepAfterStrip = false
 		}
-		return m
-	})
+		pos = l[1]
+	}
+	if pos < len(tex) {
+		if needSepAfterStrip && out.Len() > 0 && isASCIILetterByte(out.String()[out.Len()-1]) && isASCIILetterByte(tex[pos]) {
+			out.WriteByte(' ')
+		}
+		out.WriteString(tex[pos:])
+	}
+	return out.String()
 }
 
 // matchBrace 返回 tex 中 i 处 '{' 开头花括号组的结束位置（'}' 之后）。
@@ -138,7 +175,7 @@ func keepFirstTag(tex string, stats TexFixStats) string {
 	locs := texTagWordRe.FindAllStringSubmatchIndex(tex, -1)
 	var tags []int
 	for _, loc := range locs {
-		if loc[2] == loc[3] { // 后随非字母，才是真 \tag
+		if loc[2] == loc[3] && precedingBackslashes(tex, loc[0])%2 == 0 { // 后随非字母且前导反斜杠为偶数，才是真 \tag
 			tags = append(tags, loc[0])
 		}
 	}
@@ -182,8 +219,11 @@ func keepFirstTag(tex string, stats TexFixStats) string {
 		}
 	}
 	b.WriteString(tex[prev:])
-	stats["多 \\tag 只留首个"]++
-	return b.String()
+	out := b.String()
+	if out != tex {
+		stats["多 \\tag 只留首个"]++
+	}
+	return out
 }
 
 // texTagWordRe 匹配 \tag 及其后随字母（用于整词判定）；第二组捕获后随
@@ -257,14 +297,21 @@ func fixStructure(tex string, stats TexFixStats) string {
 			j := skipSpace(tex, loc[1])
 			delim := ""
 			if m := texDelimRe.FindStringIndex(tex[j:]); m != nil {
-				delim = tex[j+m[0] : j+m[1]]
+				cand := tex[j+m[0] : j+m[1]]
+				if !isStructuralTok(cand) {
+					delim = cand
+				}
 			}
 			if len(leftStack) > 0 {
 				leftStack = leftStack[:len(leftStack)-1]
 				continue
 			}
-			// 孤立 \right：剥命令保裸定界符（裸括号任意位置合法）
-			edits = append(edits, edit{loc[0], j + len(delim), delim})
+			// 孤立 \right：剥命令保裸定界符；若后随另一结构命令则仅剥 \right 自身防重叠
+			end := loc[1]
+			if delim != "" {
+				end = j + len(delim)
+			}
+			edits = append(edits, edit{loc[0], end, delim})
 			stats["孤立 \\right 剥除"]++
 		case t == `&`:
 			if len(envStack) == 0 {
@@ -281,20 +328,63 @@ func fixStructure(tex string, stats TexFixStats) string {
 		j := skipSpace(tex, p+len(`\left`))
 		delim := ""
 		if m := texDelimRe.FindStringIndex(tex[j:]); m != nil {
-			delim = tex[j+m[0] : j+m[1]]
+			cand := tex[j+m[0] : j+m[1]]
+			if !isStructuralTok(cand) {
+				delim = cand
+			}
 		}
-		edits = append(edits, edit{p, j + len(delim), delim})
+		end := p + len(`\left`)
+		if delim != "" {
+			end = j + len(delim)
+		}
+		edits = append(edits, edit{p, end, delim})
 		stats["未闭合 \\left 剥除"]++
 	}
-	// 倒序应用的前提是编辑区间互不重叠，来源有三：
-	//   - \begin/\end 的花括号参数消费区（consumedUntil）跳过内部 token；
-	//   - 未闭合 \left 剥除与孤立 \right 剥除状态互斥（\right 只在
-	//     leftStack 为空时才成为孤立）；
-	//   - 跨环境的 \left/\right 按栈视为已配对而不修补——KaTeX 仍会
-	//     拒绝，属已知边界，交由渲染降级。
-	sort.Slice(edits, func(a, b int) bool { return edits[a].s > edits[b].s })
+	// 倒序应用（附加防重叠守卫，确保任何畸形输入均不会切片越界 panic）
+	sort.Slice(edits, func(a, b int) bool {
+		if edits[a].s != edits[b].s {
+			return edits[a].s > edits[b].s
+		}
+		return edits[a].e > edits[b].e
+	})
+	lastStart := len(tex)
 	for _, ed := range edits {
-		tex = tex[:ed.s] + ed.r + tex[ed.e:]
+		if ed.s < 0 || ed.e < ed.s || ed.e > lastStart {
+			continue
+		}
+		rep := ed.r
+		// 防命令拼接：前面紧邻 ASCII 字母且替换为空（后随 ASCII 字母）或以 ASCII 字母开头时，保留空格分隔
+		if ed.s > 0 && isASCIILetterByte(tex[ed.s-1]) {
+			if (len(rep) > 0 && isASCIILetterByte(rep[0])) ||
+				(len(rep) == 0 && ed.e < len(tex) && isASCIILetterByte(tex[ed.e])) {
+				rep = " " + rep
+			}
+		}
+		tex = tex[:ed.s] + rep + tex[ed.e:]
+		lastStart = ed.s
 	}
 	return tex
+}
+
+// isASCIILetterByte 判断字节是否为 ASCII 英文字母（用于识别可能拼接为命令的边界）。
+func isASCIILetterByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// precedingBackslashes 统计 s[idx] 之前紧邻连续反斜杠数量，用于区分 \\ 换行与 \cmd。
+func precedingBackslashes(s string, idx int) int {
+	n := 0
+	for i := idx - 1; i >= 0 && s[i] == '\\'; i-- {
+		n++
+	}
+	return n
+}
+
+// isStructuralTok 判断候选定界符是否为自身带结构语义的控制 token（避免被 \left/\right 吞并）。
+func isStructuralTok(tok string) bool {
+	switch tok {
+	case `\left`, `\right`, `\begin`, `\end`, `&`, `{`, `}`:
+		return true
+	}
+	return false
 }

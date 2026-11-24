@@ -1,5 +1,5 @@
 // legacy_parity_test.go — 兼容既有引擎的边界行为。
-// 与 migration_test/events_golden_test 的结果对拍共同覆盖冻结、分段和断点边界。
+// 与 migration_test/events_golden_test 的黄金基线回归共同覆盖冻结、分段和断点边界。
 package engine
 
 import (
@@ -151,7 +151,7 @@ func TestLegacyValidatorTableStructure(t *testing.T) {
 		}
 	})
 	t.Run("行首狄拉克记号不误报", func(t *testing.T) {
-		// 本库实测 57 行 |p⟩ = … 形态：行首 | 不是表格行
+		// |p⟩ = … 形态：行首有 | 但未以 | 结尾时不是表格行
 		src := "态 |00⟩ 与 |01⟩ 构成基。"
 		dst := "|00⟩ 与 |01⟩ 构成基。"
 		if got := Validate(src, dst); len(got) != 0 {

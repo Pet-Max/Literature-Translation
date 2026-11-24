@@ -39,22 +39,22 @@ type Task struct {
 	PauseRequested bool `json:"-"`
 	// 暂停发生时所处的阶段（仅排版阶段保留值）：仅重导出短路的重试判定
 	// 依据，与卡片文案解耦。随队列持久化，重启后重试仍能正确短路。
-	PauseStage string `json:"pause_stage,omitempty"`
-	SourcePath   string     `json:"source_path"`
-	Status       TaskStatus `json:"status"`
-	Stage        string     `json:"stage"`
-	Done         int        `json:"done"`
-	Total        int        `json:"total"`
-	Failed       int        `json:"failed"`
-	DoneIdx      []int      `json:"done_idx"`   // 已完成段的 0 基编号（前端逐段着色）
-	FailedIdx    []int      `json:"failed_idx"` // 失败段的 0 基编号
-	Sweeping     bool       `json:"sweeping"`   // 正处收尾补翻阶段
-	RefsKept     int        `json:"refs_kept"`
-	OutPDF       string     `json:"out_pdf"`
-	ZHMD         string     `json:"zh_md"`
-	WorkDir      string     `json:"work_dir"`
-	Err          string     `json:"err"`
-	AddedAt      time.Time  `json:"added_at"`
+	PauseStage string     `json:"pause_stage,omitempty"`
+	SourcePath string     `json:"source_path"`
+	Status     TaskStatus `json:"status"`
+	Stage      string     `json:"stage"`
+	Done       int        `json:"done"`
+	Total      int        `json:"total"`
+	Failed     int        `json:"failed"`
+	DoneIdx    []int      `json:"done_idx"`   // 已完成段的 0 基编号（前端逐段着色）
+	FailedIdx  []int      `json:"failed_idx"` // 失败段的 0 基编号
+	Sweeping   bool       `json:"sweeping"`   // 正处收尾补翻阶段
+	RefsKept   int        `json:"refs_kept"`
+	OutPDF     string     `json:"out_pdf"`
+	ZHMD       string     `json:"zh_md"`
+	WorkDir    string     `json:"work_dir"`
+	Err        string     `json:"err"`
+	AddedAt    time.Time  `json:"added_at"`
 }
 
 var codeRe = regexp.MustCompile(`^[A-Za-z]+\d+`)

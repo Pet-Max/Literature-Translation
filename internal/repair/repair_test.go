@@ -115,8 +115,8 @@ func TestRealWorldSamples(t *testing.T) {
 
 // ---------------------------------------------------------------- Calibrate
 
-// symOrig 模拟物理文献的原文文本层：⟨⟩/→/“” 为真实 Unicode（PyMuPDF
-// 抽取形态），供符号修复与上下文锚定做锚点。
+// symOrig 模拟物理文献的原文文本层（⟨⟩/→/“” 为原始 PDF 文本层 Unicode 符号），
+// 供符号修复与上下文锚定做锚点。
 const symOrig = "with eigenstates |00⟩, |01⟩, |10⟩, |11⟩ and the basis {|0⟩, |1⟩}. " +
 	"Denote projectors as operators in the joint basis. " +
 	"the role of the generating function pq(i → f) and a transition i → f follows. " +
@@ -308,7 +308,7 @@ func TestMergeDoubleF(t *testing.T) {
 
 func TestUnfreezeNestedPlaceholder(t *testing.T) {
 	// 代码围栏嵌在 $$…$$ 内：冻结嵌套，恢复必须按外层→内层完成，
-	// 不得把 \x00N\x00 以字面量留在正文（历史全库验证中 862 处泄漏的根因）
+	// 不得把 \x00N\x00 以字面量留在正文。
 	orig := "some prose text for the vocabulary here different"
 	md := "$$\n```\nfenced $$ content\n```\n$$\n\nthe diferent text"
 	vocab := BuildVocab(orig)
@@ -325,14 +325,14 @@ func TestUnfreezeNestedPlaceholder(t *testing.T) {
 }
 
 func TestURLProtected(t *testing.T) {
-	// 图片/裸链接里的域名片段不得进词级修复（V4 验证 org→or ×399）
+	// 图片/裸链接里的域名片段不得进词级修复（避免域名片段 org 被误改为 or）
 	orig := "download the dataset mirrors and offer a natural framework for it"
-	md := "fetch ![img](https://cdn.openxlab.org.cn/a.png) and see openxlab.org.cn mirrors and over a natural framework"
+	md := "fetch ![img](https://cdn.example.org.cn/a.png) and see example.org.cn mirrors and over a natural framework"
 	got, err := Calibrate(md, orig, both)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got.Text, "openxlab.org.cn") {
+	if !strings.Contains(got.Text, "example.org.cn") {
 		t.Errorf("URL 被改坏: %q", got.Text)
 	}
 	if !strings.Contains(got.Text, "offer a natural") {
@@ -395,9 +395,8 @@ func TestTableConvert(t *testing.T) {
 
 func TestLocalContextRepair(t *testing.T) {
 	// 局部锚定只作用于漂移区（suspect 集合）：suspect 内的 Cornwal→Cornwall
-	// 修复，健康区一律不动（首版全文放开误伤 1.9 万处）。功能词源词即便
-	// 在漂移区也不替换——PDF 文本层的符号碎片经词表放行的误改（of→ofy、
-	// and→andv 类）远多于 of→off 类真修复，随证据关停
+	// 修复，健康区一律不动，防止高发通用搭配误伤。功能词源词即便
+	// 在漂移区也不替换，防止 PDF 文本层的短符号碎片污染正文。
 	orig := "the behavior of the Cornwall records and the off-diagonal terms matters here"
 	text := "the behavior of the Cornwal records and the of-diagonal terms matters here"
 	vocab := BuildVocab(orig)

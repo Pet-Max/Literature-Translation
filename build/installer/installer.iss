@@ -4,7 +4,7 @@
 
 #define AppName "Literature Translation"
 #ifndef AppVersion
-#define AppVersion "1.4.0"
+#define AppVersion "1.4.1"
 #endif
 #ifndef PayloadDir
 #define PayloadDir "..\package\Literature-Translation"

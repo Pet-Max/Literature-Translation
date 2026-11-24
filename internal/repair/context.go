@@ -3,7 +3,6 @@ package repair
 
 import (
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -12,9 +11,9 @@ import (
 // localContextRepair 全局对齐漂移区的兜底：仅处理 anchorRepair 标记为
 // suspect 的词（对齐失锁/跳步时略过的 MD 词）。W 的前词+后词若在原文中
 // 夹出唯一中间词 C（C∈词表、编辑距离≤2、C≠W），替换 W。
-// 不做全文扫描——夹缝 bigram 在健康区太弱（"the X of" 类搭配遍布全文），
-// 无差别放开会把 the→this、coherent→incoherent 这类合法词改掉
-// （首版全库验证误伤 1.9 万处即此因）。
+// 红线：仅处理 suspect 词且 W 不在原文词表中，绝不做无差别全文扫描——
+// 夹缝 bigram 在健康区太弱（"the X of" 类搭配遍布全文），放开会误伤合法词
+// （如 the→this、coherent→incoherent 或长文中的反义词对替换）。
 func localContextRepair(text, orig string, vocab map[string]struct{}, st *Stats, suspect map[int]bool) string {
 	locs := alignWordRe.FindAllStringIndex(text, -1)
 	if len(locs) < 3 {
@@ -40,19 +39,29 @@ func localContextRepair(text, orig string, vocab map[string]struct{}, st *Stats,
 		if len(w) < 2 {
 			continue
 		}
+		// 红线：仅替换不在词表中的损伤词；原文词表已收录的合法词一律放行，
+		// 防止长文档跨页漂移区出现反义词误改与多趟互改震荡。
+		if _, inVocab := vocab[w]; inVocab {
+			continue
+		}
 		cands := gap[tok[i-1]+"\x00"+tok[i+1]]
+		verbatim := false
+		for _, c := range cands {
+			if c == w {
+				verbatim = true
+				break
+			}
+		}
+		if verbatim {
+			continue
+		}
 		cand, amb := "", false
 		for _, c := range cands {
-			if c == w || len(c) < 2 {
-				continue
-			}
 			if _, ok := vocab[c]; !ok || !distLE2(w, c) {
 				continue
 			}
-			// 功能词闸与最短闸：漂移区里 "the→this"、"and→qd" 类误配
-			// 全靠这两条拦下。功能词源词一律不再替换——曾对编辑距离恰为
-			// 1 放行（of→off 类真损伤），实测同一通道同样会产出 of→ofy、
-			// and→andv、is→iis 等垃圾，垃圾远多于真修复，整体关停
+			// 功能词闸与最短闸：拦截 "the→this"、"and→qd" 类误配；
+			// 功能词源词与 <3 字符词一律不替换，防止短符号碎片污染正文。
 			if _, cFunc := functionWords[c]; cFunc || len(c) < 3 {
 				continue
 			}
@@ -68,29 +77,6 @@ func localContextRepair(text, orig string, vocab map[string]struct{}, st *Stats,
 		}
 		if cand != "" && !amb {
 			rep[i] = cand
-		}
-	}
-	// 对称互改对互斥：同文档里既有 w→c 又有 c→w（coherent↔incoherent、
-	// transition↔transitions），说明漂移区词序已乱，两向都放弃。
-	// 遍历前先收集键并排序：一边 range 一边 delete 的结果随 map 遍历
-	// 顺序漂移（同一输入两次运行修正集不同，实测 280/287），必须确定化。
-	keys := make([]int, 0, len(rep))
-	for k := range rep {
-		keys = append(keys, k)
-	}
-	sort.Ints(keys)
-	for _, i := range keys {
-		c, ok := rep[i]
-		if !ok {
-			continue // 已被先前的互斥对删除
-		}
-		for _, j := range keys {
-			c2, ok := rep[j]
-			if !ok || i == j || c2 != tok[i] || c != tok[j] {
-				continue
-			}
-			delete(rep, i)
-			delete(rep, j)
 		}
 	}
 	if len(rep) == 0 {
@@ -138,7 +124,11 @@ func anchorRepair(text, orig string, vocab map[string]struct{}, st *Stats) (stri
 	}
 	orgTok := alignTokens(orig)
 
-	rep := map[int]string{} // MD 词下标 → 替换词（小写）
+	type anchorEdit struct {
+		text    string
+		isSplit bool
+	}
+	rep := map[int]anchorEdit{} // MD 词下标 → 替换/拆分结果
 	suspect := map[int]bool{}
 	markSuspect := func(from, to int) { // [from, to) MD 词下标
 		for k := from; k < to && k < len(mdTok); k++ {
@@ -172,17 +162,43 @@ func anchorRepair(text, orig string, vocab map[string]struct{}, st *Stats) (stri
 		}
 		if a == 1 && len(mdTok[i]) >= 2 {
 			w := mdTok[i]
+			origWord := text[locs[i][0]:locs[i][1]]
+			// 顺序红线：concatSplitWord 必须在 isProtectedIdentifier 之前执行；
+			// 末尾单大写字母粘连词（如 nodesK、InM）形态上同样满足驼峰判定，调换顺序会导致有锚点拆分失效。
+			if _, inVocab := vocab[w]; !inVocab {
+				if splitText, ok := concatSplitWord(origWord, w, orgTok[j:j+b]); ok {
+					rep[i] = anchorEdit{text: splitText, isSplit: true}
+					i += a
+					j += b
+					continue
+				}
+			}
+			if isProtectedIdentifier(origWord) {
+				i += a
+				j += b
+				continue
+			}
+			// 原文分歧块中已逐词包含当前词 w 时直接放行，防止 drift 区反复互改震荡
+			verbatimInBlock := false
+			for _, c := range orgTok[j : j+b] {
+				if c == w {
+					verbatimInBlock = true
+					break
+				}
+			}
+			if verbatimInBlock {
+				i += a
+				j += b
+				continue
+			}
 			cand, ambiguous := "", false
 			for _, c := range orgTok[j : j+b] {
 				if c == w || len(c) < 3 || blockedTarget(c) {
 					continue
 				}
 				// 功能词闸对齐 localContextRepair：PDF 文本层里的两字母
-				// 物理符号（BN/Ni/Hf/ii）都在词表里，没有这道闸会把
-				// and/of/for 类功能词改成符号碎片（一本书实测约 70 处）。
-				// 功能词源词一律不再替换——曾对编辑距离恰为 1 放行（of→off
-				// 类真损伤），实测同一通道同样会产出 of→ofy、and→andv、
-				// is→iis 等垃圾，垃圾远多于真修复，整体关停
+				// 物理符号（BN/Ni/Hf/ii 等）可能进入词表，没有该闸门会把
+				// and/of/for 类功能词替换为符号碎片；功能词源词亦一律放行。
 				if _, cFunc := functionWords[c]; cFunc {
 					continue
 				}
@@ -200,7 +216,7 @@ func anchorRepair(text, orig string, vocab map[string]struct{}, st *Stats) (stri
 				}
 			}
 			if cand != "" && !ambiguous {
-				rep[i] = cand
+				rep[i] = anchorEdit{text: cand}
 			}
 		}
 		i += a
@@ -218,13 +234,50 @@ func anchorRepair(text, orig string, vocab map[string]struct{}, st *Stats) (stri
 		}
 		word := text[l[0]:l[1]]
 		out.WriteString(text[last:l[0]])
-		out.WriteString(applyCase(word, r))
+		if r.isSplit {
+			out.WriteString(r.text)
+			st.Split++
+			st.detail(word + " → " + r.text)
+		} else {
+			fixed := applyCase(word, r.text)
+			out.WriteString(fixed)
+			st.Ctx++
+			st.detail(word + " → " + fixed)
+		}
 		last = l[1]
-		st.Ctx++
-		st.detail(word + " → " + applyCase(word, r))
 	}
 	out.WriteString(text[last:])
 	return out.String(), suspect
+}
+
+// concatSplitWord 检查小写词 w 是否唯一匹配原文分歧块中相邻 2 或 3 个 token 的拼接；
+// 按 token 字节长度切片 origWord 以保留各段原始大小写（如 nodesK→nodes K）。
+func concatSplitWord(origWord, w string, block []string) (string, bool) {
+	found := ""
+	record := func(parts []string) bool {
+		if found == "" {
+			found = strings.Join(parts, " ")
+			return true
+		}
+		return found == strings.Join(parts, " ")
+	}
+	for k := 0; k+1 < len(block); k++ {
+		if len(block[k])+len(block[k+1]) == len(w) && block[k]+block[k+1] == w {
+			p1 := len(block[k])
+			if !record([]string{origWord[:p1], origWord[p1:]}) {
+				return "", false
+			}
+		}
+		if k+2 < len(block) && len(block[k])+len(block[k+1])+len(block[k+2]) == len(w) &&
+			block[k]+block[k+1]+block[k+2] == w {
+			p1 := len(block[k])
+			p2 := p1 + len(block[k+1])
+			if !record([]string{origWord[:p1], origWord[p1:p2], origWord[p2:]}) {
+				return "", false
+			}
+		}
+	}
+	return found, found != ""
 }
 
 // resync 在分歧处向前窗口搜索重同步点：MD 前进 a、原文前进 b 后两序列

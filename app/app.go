@@ -43,7 +43,7 @@ type App struct {
 	queue         *TaskQueue
 	logBuffer     []LogLine // 环形保留最近 500 条
 	logMu         sync.Mutex
-	// 任务队列落盘（F6）：状态节点回调注入队列，2 秒去抖写盘，退出强制刷
+	// 任务队列落盘：状态节点回调注入队列，2 秒去抖写盘，退出强制刷盘
 	qPersistMu  sync.Mutex
 	qPending    []Task
 	qFlushTimer *time.Timer
@@ -982,11 +982,22 @@ func (a *App) PickFontFile() (string, error) {
 
 // OpenPath 在资源管理器中打开文件所在位置（或直接打开文件夹）。
 func (a *App) OpenPath(path string) error {
-	if _, err := os.Stat(path); err != nil {
+	args, err := openPathArgs(path)
+	if err != nil {
 		return err
 	}
-	if filepath.Ext(path) != "" && filepath.Ext(path) != "." {
-		return exec.Command("explorer", "/select,", path).Start()
+	return exec.Command("explorer", args...).Start()
+}
+
+// openPathArgs 依据目标路径为目录或文件决定 Explorer 调用参数：
+// 目录直接传入路径，文件则传入 "/select," 高亮定位。
+func openPathArgs(path string) ([]string, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, err
 	}
-	return exec.Command("explorer", path).Start()
+	if !fi.IsDir() {
+		return []string{"/select,", path}, nil
+	}
+	return []string{path}, nil
 }

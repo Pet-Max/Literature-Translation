@@ -9,9 +9,8 @@ import (
 
 // ---------------------------------------------------------------- 结构还原
 
-// 表格与 <eq> 标签：MinerU 的 HTML 表格在 goldmark（unsafe 关闭）下被
-// 静默丢弃，导出 PDF 时整张表消失——75 篇样本中 11 篇中招。转成
-// Markdown 管道表格 + KaTeX 公式即可在现有渲染管线里活下来。
+// 表格与 <eq> 标签：MinerU 的 HTML 表格在 goldmark（unsafe 关闭）下会
+// 被静默丢弃；转为 Markdown 管道表格 + KaTeX 公式以在渲染管线中保留。
 var (
 	tableRe  = regexp.MustCompile(`(?s)<table[^>]*>.*?</table>`)
 	trRe     = regexp.MustCompile(`(?si)<tr[^>]*>(.*?)</tr>`)

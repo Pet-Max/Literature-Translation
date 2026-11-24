@@ -47,7 +47,7 @@ func TestParseUsesOnlyCurrentZip(t *testing.T) {
 		os.WriteFile(old, []byte("old parse"), 0600)
 		pdf := filepath.Join(t.TempDir(), "source.pdf")
 		os.WriteFile(pdf, []byte("mock"), 0600)
-		result, err := parsePDF(context.Background(), "test", pdf, "vlm", d, nil, srv.URL, time.Millisecond, time.Second)
+		result, err := parsePDF(context.Background(), "test", pdf, "vlm", "en", d, nil, srv.URL, time.Millisecond, time.Second)
 		srv.Close()
 		if len(entries) == 1 && entries["a-new/full.md"] != "" {
 			if err != nil {
@@ -122,7 +122,7 @@ func TestParsePublishPurgesStaleResults(t *testing.T) {
 	if err := os.WriteFile(pdf, []byte("mock"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	result, err := parsePDF(context.Background(), "test", pdf, "vlm", d, nil, srv.URL, time.Millisecond, time.Second)
+	result, err := parsePDF(context.Background(), "test", pdf, "vlm", "en", d, nil, srv.URL, time.Millisecond, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestParseFailureKeepsPreviousResult(t *testing.T) {
 	if err := os.WriteFile(pdf, []byte("mock"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parsePDF(context.Background(), "test", pdf, "vlm", d, nil, srv.URL, time.Millisecond, time.Second); err == nil {
+	if _, err := parsePDF(context.Background(), "test", pdf, "vlm", "en", d, nil, srv.URL, time.Millisecond, time.Second); err == nil {
 		t.Fatal("解析失败应返回错误")
 	}
 	if b, err := os.ReadFile(filepath.Join(prev, "full.md")); err != nil || string(b) != "previous parse" {

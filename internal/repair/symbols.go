@@ -9,20 +9,31 @@ import (
 // ---------------------------------------------------------------- 符号修复
 
 // 符号损伤的白名单规则。Go 正则不支持 lookbehind/lookahead，ket/bra 的
-// 边界用下标手工校验；除 \right.\left.（纯结构替换）外，其余替换都必须
-// 能在原文文本层找到锚点。
+// 边界用下标手工校验；所有替换规则（含基于狄拉克记号证据门控的 \right.\left.
+// 与引号公式/箭头回填）都必须先在原文文本层找到锚点才改写。
 var (
-	ketRe       = regexp.MustCompile(`\|([0-9A-Za-z]{1,4})i`)
-	braRe       = regexp.MustCompile(`h([0-9A-Za-z]{1,4})\|`)
-	quoteRe     = regexp.MustCompile(`\^\s*\{\s*6\s*6\s*\}([\s\S]*?)\^\s*\{\s*(?:,\s*9|9\s*,?\s*9)\s*\}`)
-	mathrmRe    = regexp.MustCompile(`\\mathrm\s*\{([^}]*)\}`)
-	rightLeftRe = regexp.MustCompile(`\\right\.\s*\\left\.`)
-	gapRe       = regexp.MustCompile(`([0-9A-Za-z}\)\]])[ \t]{2,}([0-9A-Za-z\(\[\{])`)
+	ketRe        = regexp.MustCompile(`\|([0-9A-Za-z]{1,4})i`)
+	braRe        = regexp.MustCompile(`h([0-9A-Za-z]{1,4})\|`)
+	quoteRe      = regexp.MustCompile(`\^\s*\{\s*6\s*6\s*\}([\s\S]*?)\^\s*\{\s*(?:,\s*9|9\s*,?\s*9)\s*\}`)
+	mathrmRe     = regexp.MustCompile(`\\mathrm\s*\{([^}]*)\}`)
+	rightLeftRe  = regexp.MustCompile(`\\right\.\s*\\left\.`)
+	asciiDiracRe = regexp.MustCompile(`\|[0-9A-Za-z]{1,8}>|<[0-9A-Za-z]{1,8}\|`)
+	gapRe        = regexp.MustCompile(`([0-9A-Za-z}\)\]])[ \t]{2,}([0-9A-Za-z\(\[\{])`)
 )
+
+// hasDiracEvidence 检查原文文本层是否包含狄拉克记号（Unicode 尖括号、
+// LaTeX \rangle/\langle 或 ASCII 退化形式 |x>/<x|），用于门控 \right.\left. 改写。
+func hasDiracEvidence(orig string) bool {
+	return strings.ContainsAny(orig, "⟩⟨") ||
+		strings.Contains(orig, `\rangle`) ||
+		strings.Contains(orig, `\langle`) ||
+		asciiDiracRe.MatchString(orig)
+}
 
 // normalizeSymbols 修复符号级损伤。行文部分做 ket/bra 还原，行内公式
 // 单独走定界符/引号/箭头规则；围栏代码、行间公式与标签已冻结。
 func normalizeSymbols(md, orig string, st *Stats) string {
+	diracOK := hasDiracEvidence(orig)
 	frozen, protect := freeze(md, false)
 	locs := inlineRe.FindAllStringSubmatchIndex(frozen, -1)
 	var b strings.Builder
@@ -37,10 +48,37 @@ func normalizeSymbols(md, orig string, st *Stats) string {
 		}
 		b.WriteString(fixInlineSpan(frozen[l[0]:l[1]],
 			contextWords(frozen[last:l[0]], false, 2),
-			contextWords(frozen[l[1]:afterEnd], true, 2), orig, st))
+			contextWords(frozen[l[1]:afterEnd], true, 2), orig, diracOK, st))
 		last = l[1]
 	}
 	b.WriteString(fixKetBra(frozen[last:], orig, st))
+	return unfreeze(b.String(), protect)
+}
+
+// fixArrowsInMarkdown 在词级拼写校准结束后补扫一趟公式内箭头还原，救回先前
+// 因邻近拼写/粘连错误导致散文上下文未对齐的箭头，实现单趟收敛幂等。
+func fixArrowsInMarkdown(md, orig string, st *Stats) string {
+	frozen, protect := freeze(md, false)
+	locs := inlineRe.FindAllStringSubmatchIndex(frozen, -1)
+	if len(locs) == 0 {
+		return md
+	}
+	var b strings.Builder
+	last := 0
+	for k, l := range locs {
+		b.WriteString(frozen[last:l[0]])
+		afterEnd := len(frozen)
+		if k+1 < len(locs) {
+			afterEnd = locs[k+1][0]
+		}
+		span := frozen[l[0]:l[1]]
+		inner := fixArrows(span[1:len(span)-1], orig,
+			contextWords(frozen[last:l[0]], false, 2),
+			contextWords(frozen[l[1]:afterEnd], true, 2), st)
+		b.WriteString("$" + inner + "$")
+		last = l[1]
+	}
+	b.WriteString(frozen[last:])
 	return unfreeze(b.String(), protect)
 }
 
@@ -119,7 +157,7 @@ func braFix(s, orig string, st *Stats) string {
 
 // fixInlineSpan 处理单个行内公式（span 含 $ 定界符）。before/after 是
 // 公式两侧的散文上下文词（各至多 2 个），供箭头修复锁位置。
-func fixInlineSpan(span string, before, after []string, orig string, st *Stats) string {
+func fixInlineSpan(span string, before, after []string, orig string, diracOK bool, st *Stats) string {
 	content := span[1 : len(span)-1]
 	// 1) LaTeX 引号被误认为公式：^{66}…^{,9} → “…”。候选文本（去空格/
 	//    收缩句点等变体）必须在原文中找得到 “…” 才替换。
@@ -141,12 +179,18 @@ func fixInlineSpan(span string, before, after []string, orig string, st *Stats) 
 		}
 		st.detail("跳过: 引号公式（原文无 “…” 锚）")
 	}
-	// 2) ⟩⟨ 被写成空定界符：\right.\left. → \rangle\langle（纯结构替换）
-	fixed := rightLeftRe.ReplaceAllStringFunc(content, func(string) string {
-		st.Syms++
-		st.detail(`\right.\left. → \rangle\langle`)
-		return `\rangle\langle`
-	})
+	// 2) ⟩⟨ 被写成空定界符：\right.\left. → \rangle\langle。
+	// 不变量：数学/工程/经管等学科的多段分段公式或续行对齐常含合法的
+	// \right.\left.，必须以 diracOK（原文狄拉克记号证据）为前置门控，
+	// 严禁退化为无条件全局替换。
+	fixed := content
+	if diracOK {
+		fixed = rightLeftRe.ReplaceAllStringFunc(content, func(string) string {
+			st.Syms++
+			st.detail(`\right.\left. → \rangle\langle`)
+			return `\rangle\langle`
+		})
+	}
 	// 3) 行内公式丢 →：双空格两侧 token 在原文中找 L→R 锚，且散文上下文
 	//    在命中位置附近按序出现，才回填
 	fixed = fixArrows(fixed, orig, before, after, st)

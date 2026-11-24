@@ -70,7 +70,7 @@ func TestParsePermanentErrorStopsPolling(t *testing.T) {
 	defer srv.Close()
 	file := filepath.Join(t.TempDir(), "source.pdf")
 	os.WriteFile(file, []byte("mock PDF"), 0600)
-	_, e := parsePDF(context.Background(), "temporary-token", file, "vlm", t.TempDir(), nil, srv.URL, time.Millisecond, time.Second)
+	_, e := parsePDF(context.Background(), "temporary-token", file, "vlm", "en", t.TempDir(), nil, srv.URL, time.Millisecond, time.Second)
 	if e == nil || !strings.Contains(e.Error(), "认证失败") || polls.Load() != 1 {
 		t.Fatal("permanent error retried", e, polls.Load())
 	}
@@ -97,7 +97,7 @@ func TestParseCancellationDuringPollWait(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "source.pdf")
 	os.WriteFile(file, []byte("mock"), 0600)
 	start := time.Now()
-	_, e := parsePDF(ctx, "temporary-token", file, "vlm", t.TempDir(), nil, srv.URL, time.Minute, 2*time.Minute)
+	_, e := parsePDF(ctx, "temporary-token", file, "vlm", "en", t.TempDir(), nil, srv.URL, time.Minute, 2*time.Minute)
 	if !errors.Is(e, context.Canceled) || time.Since(start) > time.Second || polls.Load() != 1 {
 		t.Fatal(e, polls.Load())
 	}

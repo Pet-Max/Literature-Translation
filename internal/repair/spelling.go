@@ -9,7 +9,8 @@ import (
 // ---------------------------------------------------------------- 拼写校准
 
 // repairProse 逐词处理。合并规则需要看前一个输出词，因此一趟扫完。
-func repairProse(text string, vocab map[string]struct{}, st *Stats) string {
+// origPairs 为原文相邻词对集合（可为 nil），仅在非 nil 时启用有锚点的末尾大写变量拆分。
+func repairProse(text string, vocab map[string]struct{}, origPairs map[string]bool, st *Stats) string {
 	locs := wordRe.FindAllStringIndex(text, -1)
 	if len(locs) == 0 {
 		return text
@@ -38,7 +39,7 @@ func repairProse(text string, vocab map[string]struct{}, st *Stats) string {
 		//      =effects）——MinerU 把 ﬀ 连字读成 "f " 时产生这种形态
 		//   无需原文 bigram 兜底：cur 若以独立词出现在原文，必在词表、
 		//   进不了本分支（合并只处理 cur ∉ 词表的碎片）
-		if i > 0 {
+		if i > 0 && isMergeableSep(text[locs[i-1][1]:locs[i][0]]) {
 			prev := lower[i-1]
 			prevFixed := out[i-1]
 			if prevFixed != "" && prevFixed != "\x00DEL\x00" {
@@ -70,7 +71,7 @@ func repairProse(text string, vocab map[string]struct{}, st *Stats) string {
 				}
 			}
 		}
-		// 2) 一词拆二
+		// 2) 一词拆二（有原文二元组锚点时含末尾单大写变量粘连拆分，如 nodesK→nodes K）
 		if len(lower[i]) >= 5 {
 			for k := 2; k <= len(lower[i])-2; k++ {
 				a, b := lower[i][:k], lower[i][k:]
@@ -86,9 +87,15 @@ func repairProse(text string, vocab map[string]struct{}, st *Stats) string {
 				continue
 			}
 		}
-		// 3) 编辑距离 ≤1 且候选唯一。≥3 字母才适用：两字母碎片（如
-		//    "ef"）的邻词太多，替换纯属猜，交给合并规则处理整对
-		if len(lower[i]) >= 3 {
+		if split, ok := splitTrailingUpperVar(words[i], vocab, origPairs); ok {
+			out[i] = split
+			st.Split++
+			st.detail(words[i] + " → " + split)
+			continue
+		}
+		// 3) 编辑距离 ≤1 且候选唯一。≥3 字母才适用，且保护学科驼峰标识符
+		//    （PyTorch、mRNA）与全大写缩写（CRISPR、TLS）不被误改。
+		if len(lower[i]) >= 3 && !isProtectedIdentifier(words[i]) {
 			cands := edit1Candidates(lower[i], vocab)
 			if len(cands) == 1 && blockedTarget(cands[0]) {
 				cands = nil // 高频短词不做目标（如 off→of 的错修）
@@ -112,9 +119,9 @@ func repairProse(text string, vocab map[string]struct{}, st *Stats) string {
 	for i, l := range locs {
 		seg := text[last:l[0]]
 		if out[i] == "\x00DEL\x00" && i > 0 {
-			// 并入前词：吃掉与前词之间的一个分隔符，避免双空格
-			if s := text[locs[i-1][1]:l[0]]; len(s) > 0 && strings.TrimSpace(s) == "" {
-				seg = seg[:len(seg)-1]
+			// 并入前词：删去完整合法空白间隔（含 \r\n），避免跨段合并或残留 \r
+			if sep := text[locs[i-1][1]:l[0]]; isMergeableSep(sep) {
+				seg = seg[:len(seg)-len(sep)]
 			}
 		}
 		b.WriteString(seg)
@@ -201,6 +208,57 @@ var targetBlock = map[string]struct{}{
 func blockedTarget(w string) bool {
 	_, ok := targetBlock[w]
 	return ok
+}
+
+// isMergeableSep 判断两词间间隔是否允许合词：仅限行内单空白与单换行（不含 \n\n 空行，避免跨段落合并）。
+func isMergeableSep(sep string) bool {
+	return sep == " " || sep == "\t" || sep == "\n" || sep == "\r\n"
+}
+
+// splitTrailingUpperVar 仅在同时满足以下条件时才拆分"词表词 + 单大写字母"粘连：
+//   - origPairs 非 nil 且原文确实相邻出现过 "prefix + last" 二元组（锚点防误拆 DirectX/SpaceX）；
+//   - prefix 本身不是含内部大写的驼峰专名（如 LaTeX/KaTeX 绝不拆分）；
+//   - prefix 小写形式存在于词表中。
+func splitTrailingUpperVar(word string, vocab map[string]struct{}, origPairs map[string]bool) (string, bool) {
+	if origPairs == nil || len(word) < 3 {
+		return "", false
+	}
+	last, prev := word[len(word)-1], word[len(word)-2]
+	if last < 'A' || last > 'Z' || prev < 'a' || prev > 'z' {
+		return "", false
+	}
+	prefix := word[:len(word)-1]
+	if isProtectedIdentifier(prefix) {
+		return "", false
+	}
+	pLower := strings.ToLower(prefix)
+	if _, ok := vocab[pLower]; !ok {
+		return "", false
+	}
+	if !origPairs[pLower+"\x00"+strings.ToLower(word[len(word)-1:])] {
+		return "", false
+	}
+	return prefix + " " + word[len(word)-1:], true
+}
+
+// isProtectedIdentifier 保护跨学科专有标识符不被 edit1 误改：全大写缩写
+// （CRISPR/TLS/CPU）与含内部大写的驼峰词（PyTorch/mRNA/TensorFlow）。
+func isProtectedIdentifier(word string) bool {
+	if len(word) < 2 {
+		return false
+	}
+	hasLower, hasInternalUpper := false, false
+	allUpper := true
+	for i := 0; i < len(word); i++ {
+		c := word[i]
+		if c >= 'a' && c <= 'z' {
+			hasLower = true
+			allUpper = false
+		} else if c >= 'A' && c <= 'Z' && i > 0 {
+			hasInternalUpper = true
+		}
+	}
+	return allUpper || (hasLower && hasInternalUpper)
 }
 
 // applyCase 把替换词套用原词的首字母大小写。

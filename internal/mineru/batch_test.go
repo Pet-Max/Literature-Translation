@@ -70,7 +70,7 @@ func TestParseFilesBatch(t *testing.T) {
 
 	var states []string
 	results, itemErrs, err := parseFilesBatch(context.Background(), "tok",
-		[]string{pdf1, pdf2}, "vlm", workDir,
+		[]string{pdf1, pdf2}, "vlm", "en", workDir,
 		func(idx int, state string) { states = append(states, fmt.Sprintf("%d:%s", idx, state)) },
 		srv.URL, 10*time.Millisecond, 20*time.Minute, false)
 	if err != nil {
@@ -124,7 +124,7 @@ func TestParseFilesBatchItemFailed(t *testing.T) {
 	pdf := filepath.Join(t.TempDir(), "probe.pdf")
 	os.WriteFile(pdf, []byte("fake-pdf"), 0o644)
 	_, _, err := parseFilesBatch(context.Background(), "tok",
-		[]string{pdf, pdf}, "vlm", t.TempDir(), nil,
+		[]string{pdf, pdf}, "vlm", "en", t.TempDir(), nil,
 		srv.URL, 10*time.Millisecond, 20*time.Minute, false)
 	if err == nil || !strings.Contains(err.Error(), "条目 1") {
 		t.Fatalf("应报条目 1 失败，实际: %v", err)
@@ -159,7 +159,7 @@ func TestParseFilesBatchTolerant(t *testing.T) {
 	pdf := filepath.Join(t.TempDir(), "probe.pdf")
 	os.WriteFile(pdf, []byte("fake-pdf"), 0o644)
 	results, itemErrs, err := parseFilesBatch(context.Background(), "tok",
-		[]string{pdf, pdf}, "vlm", t.TempDir(), nil,
+		[]string{pdf, pdf}, "vlm", "en", t.TempDir(), nil,
 		srv.URL, 10*time.Millisecond, 20*time.Minute, true)
 	if err != nil {
 		t.Fatalf("宽容模式不应整批失败: %v", err)

@@ -1,14 +1,14 @@
-// mathartifacts.go — MinerU 数学区系统性伪影的通用归一（多份实证语料，
-// 按形态设计、不绑定具体文档）：
+// mathartifacts.go — MinerU 数学区系统性伪影的通用归一（按文本特征设计、
+// 不绑定特定文献）：
 //
 //	R1 `\ :` → `\:`　　间距宏被裂成「反斜杠+空格+冒号」，KaTeX 渲染出真冒号
-//	                   （实证语料全覆盖；文本层证实原文无冒号，源是间距宏 \:）
+//	                   （原文文本层无冒号，源是间距宏 \:）
 //
 // 引号恢复由 symbols.go 执行，须有原文引号证据；数字上标本身不作为判据。
 //
 //	R3 $\operatorname{Eq.}$ . (3) → Eq. (3)　公式引用编号被甩出 math，下游
 //	                   翻译产生「由 Eq. 计算得到。(3) 考虑了」的句界撕裂
-//	                   （多份语料命中；点在 math 内/外两种变体都收）
+//	                   （点在 math 内/外两种变体均覆盖）
 //	R4 $^{4 \mathrm{V} ,}$ → 4 V,　正文片段被整体上标。判据：行内公式以 ^
 //	                   开头且内容以逗号/分号结尾——真实上标从不如此
 //	R5 $…$ <sub>x</sub> → $…$　公式已含同一下标时的冗余残片（重复性校验
@@ -20,7 +20,6 @@ package repair
 import (
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -60,6 +59,7 @@ func fixMathArtifacts(text string, st *Stats) string {
 		return key
 	}
 	text = fenceRe.ReplaceAllStringFunc(text, keep)
+	text = codeSpanRe.ReplaceAllStringFunc(text, keep)
 	text = urlRe.ReplaceAllStringFunc(text, keep)
 
 	// 跨公式边界的两条先做
@@ -93,15 +93,7 @@ func fixMathArtifacts(text string, st *Stats) string {
 		}
 	}
 
-	keys := make([]string, 0, len(prot))
-	for k := range prot {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool { return numOfKey(keys[i]) > numOfKey(keys[j]) })
-	for _, k := range keys {
-		text = strings.ReplaceAll(text, k, prot[k])
-	}
-	return text
+	return unfreeze(text, prot)
 }
 
 // fixDisplayMath 行间公式：只做内容级归一（R1），R4 按规格仅限行内。

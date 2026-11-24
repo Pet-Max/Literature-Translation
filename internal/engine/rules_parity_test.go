@@ -2,7 +2,7 @@
 // （config.DefaultRules）与引擎侧兜底文案（IronRules）逐字一致，
 // 曾出现措辞漂移，改任一侧必须同步另一侧。
 // 放在 engine 包：config 是低层包，其测试不应反向依赖本包。
-// 历史规则正文已由 migration_test 的黄金对拍
+// 既有规则正文已由 migration_test 的黄金基线校验
 // 逐字节锁死，此处传递锚定。
 package engine
 

@@ -1,8 +1,6 @@
-// printchunks.go — 分段打印回退：整本文档在部分机器状态下整本直出会
-// 稳定失败（打印生成阶段崩溃 Chromium -32000，或直出超时），而同一内容
-// 切成分段各自渲染打印实测稳定（920 页书切 4 段、每段数十秒出片）。
-// 本文件按段落空行边界切分译文，逐段渲染打印，最后 pdfcpu 合并为单个
-// PDF；整本目录注入首段。触发条件与预算见 pipeline.export 与 pdf.go。
+// printchunks.go — 分段打印回退：超大文档整本直出触发 Chromium 打印规模
+// 失败或超时，按段落空行边界切分译文逐段渲染打印，再合并为单个 PDF；
+// 整本目录注入首段。
 package pipeline
 
 import (
@@ -22,13 +20,9 @@ import (
 )
 
 const (
-	// 文档低于此体积不值得分段（≈150 页以下，直出成功率足够高，
-	// 失败多为确定性错误，分段也救不了）
-	chunkMinBytes = 512 << 10
-	// 单段目标体积：920 页书 ≈3.2MB 切 4 段（每段约 230 页），
-	// 每段完整流程数十秒实测稳定
-	chunkTargetBytes = 800 << 10
-	// 段数上限（预算守护：15 分钟预算 = 直出 6 分钟 + 分段余量）
+	// 分段触发阈值与单段目标体积统一为 512 KiB，避免阈值错位造成的触发死区。
+	chunkTargetBytes = 512 << 10
+	// 段数上限（控制整轮分段导出总时长）
 	chunkMaxCount = 12
 )
 
@@ -52,8 +46,8 @@ func (p *Pipeline) printWithRetry(ctx context.Context, dir, html, out, fontsDir 
 }
 
 // splitMarkdownChunks 按段落空行边界（"\n\n"）把 md 切成若干段：切点
-// 不拦腰截断段落/表格/公式块；各段依序拼接等于原文（内容无损）。
-// 低于单段目标体积原样返回单段。
+// 避开围栏代码块内部，且不拦腰截断段落/表格/公式块；动态按剩余体积均分，
+// 最后一段吸收余量（不留数 KB 孤立尾段、不超 maxN）；各段依序拼接等于原文。
 func splitMarkdownChunks(md string, target int, maxN int) []string {
 	if len(md) <= target {
 		return []string{md}
@@ -65,32 +59,113 @@ func splitMarkdownChunks(md string, target int, maxN int) []string {
 	if n < 2 {
 		n = 2
 	}
-	size := (len(md) + n - 1) / n
+	fences := markdownFenceRanges(md)
+	inFence := func(pos int) bool {
+		for _, r := range fences {
+			if pos >= r[0] && pos <= r[1] {
+				return true
+			}
+			if r[0] > pos {
+				break
+			}
+		}
+		return false
+	}
+	isSafeCut := func(cut int) bool {
+		return cut > 0 && cut+2 <= len(md) && md[cut-1] != '\n' && !inFence(cut)
+	}
+
 	var chunks []string
 	last := 0
-	for last < len(md) {
-		cut := last + size
-		if cut >= len(md) {
+	for rem := n; rem > 0 && last < len(md); rem-- {
+		if rem == 1 {
 			chunks = append(chunks, md[last:])
 			break
 		}
-		// 优先回退到窗口内最近的段落边界；窗口起点恰为边界或窗口内
-		// 无边界时向前找（避免产生空段或死循环）
-		at := strings.LastIndex(md[last:cut], "\n\n")
-		if at <= 0 {
-			fwd := strings.Index(md[cut:], "\n\n")
-			if fwd < 0 {
-				chunks = append(chunks, md[last:])
+		size := (len(md) - last + rem - 1) / rem
+		ideal := last + size
+		if ideal >= len(md) {
+			chunks = append(chunks, md[last:])
+			break
+		}
+		chosen := -1
+		// 在 (last, ideal] 内向前回退找最近的安全段落边界
+		searchTo := ideal
+		for searchTo > last {
+			idx := strings.LastIndex(md[last:searchTo], "\n\n")
+			if idx <= 0 {
 				break
 			}
-			cut += fwd
-		} else {
-			cut = last + at
+			cand := last + idx
+			if isSafeCut(cand) {
+				chosen = cand
+				break
+			}
+			searchTo = cand
 		}
-		chunks = append(chunks, md[last:cut])
-		last = cut
+		// 窗口内无安全边界则向后找
+		if chosen < 0 {
+			pos := ideal
+			for pos < len(md) {
+				fwd := strings.Index(md[pos:], "\n\n")
+				if fwd < 0 {
+					break
+				}
+				cand := pos + fwd
+				if cand > last && isSafeCut(cand) {
+					chosen = cand
+					break
+				}
+				pos = cand + 2
+			}
+		}
+		if chosen < 0 || chosen <= last {
+			chunks = append(chunks, md[last:])
+			break
+		}
+		chunks = append(chunks, md[last:chosen])
+		last = chosen
 	}
 	return chunks
+}
+
+// markdownFenceRanges 扫描 Markdown 围栏代码块（``` 或 ~~~）的起止字节区间。
+func markdownFenceRanges(md string) [][2]int {
+	var ranges [][2]int
+	open := -1
+	mark := ""
+	pos := 0
+	for pos <= len(md) {
+		end := strings.IndexByte(md[pos:], '\n')
+		lineEnd := len(md)
+		next := len(md) + 1
+		if end >= 0 {
+			lineEnd = pos + end
+			next = lineEnd + 1
+		}
+		trimmed := strings.TrimSpace(md[pos:lineEnd])
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			m := trimmed[:3]
+			if open < 0 {
+				rest := strings.TrimLeft(trimmed, m[:1])
+				validOpen := !((m == "```" && strings.Contains(rest, "`")) ||
+					(m == "~~~" && strings.Contains(rest, "~~~")))
+				if validOpen {
+					open = pos
+					mark = m
+				}
+			} else if m == mark && strings.Trim(trimmed, m[:1]) == "" {
+				ranges = append(ranges, [2]int{open, lineEnd})
+				open = -1
+				mark = ""
+			}
+		}
+		pos = next
+	}
+	if open >= 0 {
+		ranges = append(ranges, [2]int{open, len(md)})
+	}
+	return ranges
 }
 
 // chunkedExport 分段打印合并：逐段渲染打印（首段注入整本目录），pdfcpu
@@ -108,14 +183,19 @@ func (p *Pipeline) chunkedExport(ctx context.Context, mdBytes []byte, t zhTarget
 
 	var parts []string
 	for i, part := range chunks {
+		title := ""
+		if i == 0 {
+			title = t.Title
+		}
 		doc, _ := render.BuildWithStats(part, render.Options{
-			Title:       t.Title,
-			FontCSS:     fontStack(cfg),
-			UserFontCSS: userFontCSS(cfg),
-			EnBg:        cfg.Export.EnBg,
-			ZhBg:        cfg.Export.ZhBg,
-			TOC:         useTOC && i == 0,
-			TwoColumn:   useTwo,
+			Title:        title,
+			NoCoverTitle: i > 0,
+			FontCSS:      fontStack(cfg),
+			UserFontCSS:  userFontCSS(cfg),
+			EnBg:         cfg.Export.EnBg,
+			ZhBg:         cfg.Export.ZhBg,
+			TOC:          useTOC && i == 0,
+			TwoColumn:    useTwo,
 		})
 		if i == 0 && useTOC {
 			doc = injectFullTOC(fullHTML, doc)
@@ -155,8 +235,8 @@ func (p *Pipeline) chunkedExport(ctx context.Context, mdBytes []byte, t zhTarget
 }
 
 // injectFullTOC 把整本渲染的目录块（含全部章节条目）替换到分段渲染的
-// 首段 HTML——首段自身的目录只覆盖首段内容。锚点跨段跳转在打印里本就
-// 失效，目录条目仅作翻阅定位。
+// 首段 HTML；若首段因无标题未生成 <nav class="toc">，则直接插入正文前。
+// 锚点跨段跳转在打印里本就失效，目录条目仅作翻阅定位。
 func injectFullTOC(fullHTML, chunkHTML string) string {
 	full := extractTOC(fullHTML)
 	if full == "" {
@@ -164,6 +244,10 @@ func injectFullTOC(fullHTML, chunkHTML string) string {
 	}
 	cs := strings.Index(chunkHTML, `<nav class="toc">`)
 	if cs < 0 {
+		const marker = `<article class="content">`
+		if art := strings.Index(chunkHTML, marker); art >= 0 {
+			return chunkHTML[:art] + full + "\n" + chunkHTML[art:]
+		}
 		return chunkHTML
 	}
 	ce := strings.Index(chunkHTML[cs:], "</nav>")

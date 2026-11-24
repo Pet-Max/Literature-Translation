@@ -2,6 +2,7 @@
 package repair
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -62,32 +63,61 @@ func buildAccentMap() map[string]rune {
 // accentRe 分离重音符（音符 + 单字母）。
 var accentRe = regexp.MustCompile(`[¨´` + "`" + `ˆ˜ˇ˘˝¯][A-Za-zı]`)
 
-// composeAccents 把 MD 中的分离重音符合成预组合字符。"H¨anggi" 是
-// LaTeX \'a 的退化输出，拆开的音符在渲染和翻译里都是噪声。英文正文里
-// "音符紧跟字母" 几乎不合法，故无需原文锚。
-func composeAccents(md string, st *Stats) string {
-	res := accentRe.ReplaceAllStringFunc(md, func(s string) string {
-		if r, ok := accentMap[s]; ok {
-			return string(r)
+// composeMarkdownAccents 在冻结围栏代码块、行内反引号代码、URL 与公式后
+// 合成 Markdown 正文中的分离重音符，防止把行内反引号代码（如 `env`）或三反引号代码块
+// 等技术文档代码片段误改写成 è/à。
+func composeMarkdownAccents(md string, st *Stats) string {
+	prot := map[string]string{}
+	n := 0
+	keep := func(s string) string {
+		if strings.ContainsRune(s, 0) {
+			return s
 		}
-		return s
-	})
-	if n := len(accentRe.FindAllString(md, -1)); n > 0 {
-		composed := len(accentRe.FindAllString(md, -1)) - countUncomposed(md, res)
-		st.Accents = composed
+		n++
+		key := fmt.Sprintf("\x00A%d\x00", n)
+		prot[key] = s
+		return key
 	}
-	return res
+	text := fenceRe.ReplaceAllStringFunc(md, keep)
+	text = codeSpanRe.ReplaceAllStringFunc(text, keep)
+	text = urlRe.ReplaceAllStringFunc(text, keep)
+	text = dispRe.ReplaceAllStringFunc(text, keep)
+	text = inlineRe.ReplaceAllStringFunc(text, keep)
+	text = composeAccents(text, st)
+	return unfreeze(text, prot)
 }
 
-func countUncomposed(orig, res string) int {
-	// 仍未被合成的（不在映射表内的组合）数量
-	n := 0
-	for _, l := range accentRe.FindAllString(res, -1) {
-		if _, ok := accentMap[l]; !ok {
-			n++
-		}
+// composeAccents 把文本中的分离重音符合成预组合字符。"H¨anggi" 是
+// LaTeX \'a 的退化输出，拆开的音符在渲染和翻译里都是噪声。连续或转义的
+// ASCII 反引号（如三反引号代码围栏、双反引号或转义反引号）一律跳过，防破坏代码围栏。
+func composeAccents(md string, st *Stats) string {
+	locs := accentRe.FindAllStringIndex(md, -1)
+	if len(locs) == 0 {
+		return md
 	}
-	return n
+	var b strings.Builder
+	last := 0
+	composed := 0
+	for _, l := range locs {
+		s := md[l[0]:l[1]]
+		if s[0] == '`' && l[0] > 0 && (md[l[0]-1] == '`' || md[l[0]-1] == '\\') {
+			continue
+		}
+		r, ok := accentMap[s]
+		if !ok {
+			continue
+		}
+		b.WriteString(md[last:l[0]])
+		b.WriteRune(r)
+		last = l[1]
+		composed++
+	}
+	if composed == 0 {
+		return md
+	}
+	b.WriteString(md[last:])
+	st.Accents += composed
+	return b.String()
 }
 
 // normalizeOrig 归一原文文本层（连字/组合符/分离重音符），词表、上下文
@@ -117,8 +147,8 @@ func dehyphenate(origText string) string {
 	}
 	return hyphenBreakRe.ReplaceAllStringFunc(origText, func(m string) string {
 		p := hyphenBreakRe.FindStringSubmatch(m)
-		_, aFunc := functionWords[p[1]]
-		_, bFunc := functionWords[p[2]]
+		_, aFunc := functionWords[strings.ToLower(p[1])]
+		_, bFunc := functionWords[strings.ToLower(p[2])]
 		if aFunc || bFunc {
 			if _, ok := standalone[strings.ToLower(p[2])]; ok && len(p[2]) >= 2 {
 				return p[1] + "- " + p[2]

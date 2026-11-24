@@ -1,5 +1,5 @@
-// mathartifacts_test.go — 数学区伪影归一：全库语料真实实例回归 + 误伤
-// 边界锁定（同位素 ^{40}Ca⁺、尾注 ^{,9}/^{9}、math 外伪影、行间公式 R4 豁免）。
+// mathartifacts_test.go — 数学区伪影归一规则回归与误伤边界锁定
+// （同位素 ^{40}Ca⁺、尾注 ^{,9}/^{9}、math 外伪影、行间公式 R4 豁免）。
 package repair
 
 import (
@@ -7,24 +7,23 @@ import (
 	"testing"
 )
 
-// TestMathArtifacts_CorpusCases 语料实例回归：每条规则对应真实文献中
-// 出现过的原始形态。
-func TestMathArtifacts_CorpusCases(t *testing.T) {
+// TestMathArtifacts_Cases 验证各条数学区规则的典型退化形态与恢复结果。
+func TestMathArtifacts_Cases(t *testing.T) {
 	cases := []struct {
 		name, in, want string
 	}{
-		// R1：间距宏裂开（"3.4 : mK" 冒号伪影的实证形态）
+		// R1：间距宏裂开
 		{"R1 间距宏", "$T _ { C } = 3 . 4 \\ : \\mathrm { mK }$", "$T _ { C } = 3 . 4 \\: \\mathrm { mK }$"},
-		// R3：引用撕裂（点在 math 内/外两种实证变体）
+		// R3：引用撕裂（点在 math 内/外两种变体）
 		{"R3 带内点", "from $\\operatorname { E q . }$ . (3) accounting", "from Eq. (3) accounting"},
 		{"R3 点在外", "of $\\operatorname { E q } .$ . (2) does", "of Eq. (2) does"},
 		{"R3 无编号", "per $\\operatorname { E q . }$ below", "per Eq. below"},
-		// R4：伪上标（某图注 "4 V," 被整体上标）
+		// R4：伪上标（整段文本被误包装为上标）
 		{"R4 伪上标", "amplitude of $^ { 4 \\mathrm { V } , }$ we", "amplitude of 4 V, we"},
 		{"R4 分号收尾", "noise of $^ { 2 \\mathrm { mW } ; }$ then", "noise of 2 mW; then"},
-		// R4 双句读去重：MinerU 把逗号既包进伪上标又落在 math 外（实证形态）
+		// R4 双句读去重：逗号既被包进伪上标又落在 math 外
 		{"R4 双逗号去重", "amplitude of $^ { 4 \\mathrm { V } , }$ , we calculate", "amplitude of 4 V, we calculate"},
-		// R5：公式后冗余下标残片（\bar{n}_r 后跟 <sub>r</sub> 的实证形态）
+		// R5：公式后冗余下标残片
 		{"R5 冗余残片", "$\\bar { n } _ { \\mathrm { r } } = k _ { B } T / \\hbar \\omega _ { i }$ <sub>r</sub> 随",
 			"$\\bar { n } _ { \\mathrm { r } } = k _ { B } T / \\hbar \\omega _ { i }$ 随"},
 		{"R5 裸下标", "where $E _ { kin }$ <sub>kin</sub> is", "where $E _ { kin }$ is"},

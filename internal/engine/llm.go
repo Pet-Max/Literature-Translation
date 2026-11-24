@@ -2,8 +2,8 @@
 //
 // 只使用通用请求体
 // （model/messages/temperature），非流式，不依赖任何厂商私有参数，
-// 保证对各类兼容服务的最大适配面。网络层重试（429/5xx/超时，指数
-// 退避）只在这里做；质量重试（校验失败回喂）由 engine 循环负责，
+// 保证对各类兼容服务的最大适配面。网络层重试（408/429/5xx/超时，指数
+// 退避并尊重 Retry-After）只在这里做；质量重试（校验失败回喂）由 engine 循环负责，
 // 两层互不混淆。
 //
 // 请求禁止自动跟随重定向，使用 CheckRedirect 显式控制；
@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -105,7 +106,7 @@ func (c *LLMClient) CompleteContext(ctx context.Context, system, user string, te
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		content, retryable, err := c.once(ctx, body)
+		content, retryable, retryAfter, err := c.once(ctx, body)
 		if err == nil {
 			return content, nil
 		}
@@ -118,6 +119,9 @@ func (c *LLMClient) CompleteContext(ctx context.Context, system, user string, te
 			if d > 8*time.Second {
 				d = 8 * time.Second
 			}
+			if retryAfter > d {
+				d = retryAfter
+			}
 			if err := waitContext(ctx, d); err != nil {
 				return "", err
 			}
@@ -126,60 +130,73 @@ func (c *LLMClient) CompleteContext(ctx context.Context, system, user string, te
 	return "", &LLMError{Msg: fmt.Sprintf("重试 %d 次后仍失败，最后错误：%s", c.maxAttempts, lastErr)}
 }
 
-// once 单次请求。retryable=true 表示值得退避重试（网络错误/429/5xx），
+// once 单次请求。retryable=true 表示值得退避重试（网络错误/408/429/5xx 含 524），
 // err 即此刻的最后错误文案。
-func (c *LLMClient) once(ctx context.Context, body []byte) (content string, retryable bool, err error) {
+func (c *LLMClient) once(ctx context.Context, body []byte) (content string, retryable bool, retryAfter time.Duration, err error) {
 	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
 	if reqErr != nil {
-		return "", false, &LLMError{Msg: "网络错误: " + reqErr.Error()}
+		return "", false, 0, &LLMError{Msg: "网络错误: " + reqErr.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 	resp, doErr := c.client.Do(req)
 	if doErr != nil {
-		return "", true, &LLMError{Msg: "网络错误: " + doErr.Error()}
+		return "", true, 0, &LLMError{Msg: "网络错误: " + doErr.Error()}
 	}
 	defer resp.Body.Close()
 	respBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
 		// 响应体读取中断（网络抖动/连接重置）：按网络错误处理走重试，
 		// 保留原始读取错误，不将读取失败误判为「非 JSON」
-		return "", true, &LLMError{Msg: "网络错误: " + readErr.Error()}
+		return "", true, 0, &LLMError{Msg: "网络错误: " + readErr.Error()}
 	}
 	text := string(respBody)
 
 	if resp.StatusCode == http.StatusOK {
 		if !json.Valid(respBody) {
 			// 200 但 body 非 JSON：多为模型 API 地址配错（如打到了网页）
-			return "", false, &LLMError{Msg: "返回了非 JSON 内容（检查模型 API 地址是否正确）: " + truncChars(text, 120)}
+			return "", false, 0, &LLMError{Msg: "返回了非 JSON 内容（检查模型 API 地址是否正确）: " + truncChars(text, 120)}
 		}
 		trimmed := bytes.TrimLeft(respBody, " \t\r\n")
 		if len(trimmed) == 0 || trimmed[0] != '{' {
 			// 合法 JSON 但非对象（如顶层数组）：显式转为可读文本。
 			// 引号风格与历史版本文案略有差异，仅出现在配错地址时
-			return "", false, &LLMError{Msg: "返回了非预期格式（应为 JSON 对象）: " + truncChars(text, 120)}
+			return "", false, 0, &LLMError{Msg: "返回了非预期格式（应为 JSON 对象）: " + truncChars(text, 120)}
 		}
 		var data chatResponse
 		if json.Unmarshal(respBody, &data) != nil {
-			return "", false, &LLMError{Msg: "返回了非预期格式（应为 JSON 对象）: " + truncChars(text, 120)}
+			return "", false, 0, &LLMError{Msg: "返回了非预期格式（应为 JSON 对象）: " + truncChars(text, 120)}
 		}
 		var content *string
 		if len(data.Choices) > 0 {
 			content = data.Choices[0].Message.Content
 		}
 		if content == nil || strings.TrimSpace(*content) == "" {
-			return "", false, &LLMError{Msg: "模型返回了空内容"}
+			return "", false, 0, &LLMError{Msg: "模型返回了空内容"}
 		}
-		return strings.TrimSpace(*content), false, nil
+		return strings.TrimSpace(*content), false, 0, nil
 	}
-	switch resp.StatusCode {
-	case http.StatusTooManyRequests, http.StatusInternalServerError,
-		http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-		return "", true, &LLMError{Msg: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncChars(text, 200))}
+	if resp.StatusCode == http.StatusRequestTimeout ||
+		resp.StatusCode == http.StatusTooManyRequests ||
+		resp.StatusCode >= 500 {
+		return "", true, parseRetryAfter(resp.Header.Get("Retry-After")),
+			&LLMError{Msg: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncChars(text, 200))}
 	}
 	// 其余（鉴权失败、模型名错误等）重试无意义，直接抛
-	return "", false, &LLMError{Msg: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncChars(text, 300))}
+	return "", false, 0, &LLMError{Msg: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, truncChars(text, 300))}
+}
+
+// parseRetryAfter 解析 HTTP Retry-After 秒数响应头，单次退避等待封顶 30 秒。
+func parseRetryAfter(v string) time.Duration {
+	secs, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || secs <= 0 {
+		return 0
+	}
+	if secs > 30 {
+		secs = 30
+	}
+	return time.Duration(secs) * time.Second
 }
 
 // Close 释放空闲连接。

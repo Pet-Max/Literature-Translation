@@ -15,15 +15,17 @@ window.__renderStats = { rendered: 0, errors: [] };
 // 每轮先把字号复位到自然值再测：任何一轮的误判（字体晚到、窗口瞬时
 // 宽度、滚动条出现）都会在下一轮复原，缩小不再"粘住"，多次调用不累积。
 function fitWideFormulas() {
-  document.querySelectorAll(".ktx-disp").forEach(function (el) {
+  var list = Array.prototype.slice.call(document.querySelectorAll(".ktx-disp"));
+  if (!list.length) { return; }
+  // 读写分离：先批量复位并读取初始度量，减少大文档交替读写引起的强制重排
+  list.forEach(function (el) {
     if (!el.dataset.baseFs) {
       el.dataset.baseFs = parseFloat(getComputedStyle(el).fontSize) || 15;
     }
-    var base = parseFloat(el.dataset.baseFs);
     el.style.fontSize = "";
-    // 居中的 nowrap 内容向两侧等量溢出，滚动区只计入右侧一半，
-    // 故按 (clientWidth + 2*overflow) 估算公式实际宽度；迭代至多
-    // 8 轮消除 scrollWidth 取整误差，每轮都从当前字号重新收敛。
+  });
+  list.forEach(function (el) {
+    var base = parseFloat(el.dataset.baseFs);
     for (var i = 0; i < 8; i++) {
       var over = el.scrollWidth - el.clientWidth;
       if (over <= 2) { return; }
@@ -79,18 +81,33 @@ function fitWideOverflow() {
 function fitPrintFormulas() {
   var clip = document.querySelector(".content").getBoundingClientRect();
   if (!clip.width) { return; }
+  var disps = [];
   document.querySelectorAll(".ktx-disp").forEach(function (el) {
-    for (var i = 0; i < 8 && el.scrollWidth > el.clientWidth + 2; i++) {
-      var cur = parseFloat(getComputedStyle(el).fontSize) || 15;
-      el.style.fontSize = Math.max(6, cur * 0.85) + "px";
+    if (el.scrollWidth > el.clientWidth + 2) {
+      disps.push({ el: el, fs: parseFloat(getComputedStyle(el).fontSize) || 15 });
     }
   });
+  disps.forEach(function (item) {
+    var cur = item.fs;
+    for (var i = 0; i < 8 && item.el.scrollWidth > item.el.clientWidth + 2; i++) {
+      cur = Math.max(6, cur * 0.85);
+      item.el.style.fontSize = cur + "px";
+    }
+  });
+  var inlines = [];
   document.querySelectorAll(".ktx").forEach(function (el) {
+    var r = el.getBoundingClientRect();
+    if (r.right > clip.right + 1) {
+      inlines.push({ el: el, fs: parseFloat(getComputedStyle(el).fontSize) || 15 });
+    }
+  });
+  inlines.forEach(function (item) {
+    var cur = item.fs;
     for (var i = 0; i < 6; i++) {
-      var r = el.getBoundingClientRect();
+      var r = item.el.getBoundingClientRect();
       if (r.right <= clip.right + 1) { return; }
-      var cur = parseFloat(getComputedStyle(el).fontSize) || 15;
-      el.style.fontSize = Math.max(6, cur * 0.8) + "px";
+      cur = Math.max(6, cur * 0.8);
+      item.el.style.fontSize = cur + "px";
     }
   });
 }

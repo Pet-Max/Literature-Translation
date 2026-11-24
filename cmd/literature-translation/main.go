@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 
 	"literature-translation/internal/config"
@@ -181,7 +182,15 @@ func runCmd(args []string) error {
 }
 
 func reportMissing(cfg *config.Config) {
-	if missing := cfg.ValidateAndReport(); len(missing) > 0 {
+	exitOnMissing(cfg.ValidateAndReport())
+}
+
+func reportMissingLLM(cfg *config.Config) {
+	exitOnMissing(cfg.ValidateLLMAndReport())
+}
+
+func exitOnMissing(missing []string) {
+	if len(missing) > 0 {
 		for _, m := range missing {
 			fmt.Println("✗", m)
 		}
@@ -205,7 +214,7 @@ func translateCmd(args []string) error {
 		return fmt.Errorf("路径参数包含换行（可能同时匹配到了原文与 *_zh.md）: %q", fs.Arg(0))
 	}
 	cfg := cfgLoad()
-	reportMissing(cfg)
+	reportMissingLLM(cfg)
 	if strings.HasSuffix(strings.ToLower(fs.Arg(0)), "_zh.md") {
 		return fmt.Errorf("传入的是译文文件（*_zh.md）——请传入原文 MD，译文会自动生成")
 	}
@@ -302,7 +311,12 @@ func printCmd(args []string) error {
 	defer p.Close()
 	ctx, cancel := signalCtx()
 	defer cancel()
-	_, err = p.ExportMD(ctx, fs.Arg(0), *out, toc, twoCol)
+	outPath := *out
+	if strings.TrimSpace(outPath) == "" {
+		mdPath := fs.Arg(0)
+		outPath = strings.TrimSuffix(mdPath, filepath.Ext(mdPath)) + ".pdf"
+	}
+	_, err = p.ExportMD(ctx, fs.Arg(0), outPath, toc, twoCol)
 	return err
 }
 

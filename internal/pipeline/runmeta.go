@@ -33,15 +33,22 @@ type runMeta struct {
 
 // Only non-secret fields enter the fingerprint and metadata. Presentation-only
 // changes can reuse a complete translation; parse/repair/provider changes cannot.
+// 红线：新增配置字段参与指纹时，默认值须经 `omitempty` 保持零值省略，以免作废
+// 存量默认配置归档的断点与解析复用资格。
 func (p *Pipeline) configFingerprint() string {
 	c := p.Cfg
+	lang := strings.TrimSpace(c.MinerU.Language)
+	if lang == "" || strings.EqualFold(lang, "en") {
+		lang = ""
+	}
 	system := engine.BuildSystem(glossaryPairs(c), c.Rules.ActiveText(), "")
 	data, _ := json.Marshal(struct {
 		Key, Provider, Parser string
 		Spelling, Symbols     bool
+		Lang                  string `json:"Lang,omitempty"`
 	}{
 		engine.BuildCacheKey(system, c.Export.Bilingual, c.Translate.SkipReferences, c.LLM.Model),
-		c.LLM.BaseURL, c.MinerU.ModelVersion, c.Repair.Spelling, c.Repair.Symbols,
+		c.LLM.BaseURL, c.MinerU.ModelVersion, c.Repair.Spelling, c.Repair.Symbols, lang,
 	})
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:])
@@ -174,13 +181,26 @@ func (p *Pipeline) resumableRun(plan *ArchivePlan) (runMeta, error) {
 	if m.ConfigFingerprint != p.configFingerprint() {
 		return m, fmt.Errorf("解析、翻译配置已变化")
 	}
+	// 职责分离红线：SourceHash 始终核对 plan.SourcePath（未改动原件），
+	// InputHash 核对结构规整后落盘的实际输入（PDF 与经规整的非 PDF 均优先指向 EnMDPath）。
 	h, e := fileHash(plan.SourcePath)
 	if e != nil || h != m.SourceHash {
 		return m, fmt.Errorf("源文件已变化或缺失")
 	}
+	isPDF := strings.EqualFold(filepath.Ext(plan.SourcePath), ".pdf")
+	if !isPDF {
+		srcResources, re := resourceHashes(plan.SourcePath)
+		if re != nil || !reflect.DeepEqual(srcResources, m.InputResources) {
+			return m, fmt.Errorf("原文图片已变化或缺失")
+		}
+	}
 	input := plan.SourcePath
-	if strings.EqualFold(filepath.Ext(input), ".pdf") {
+	if isPDF {
 		input = plan.EnMDPath
+	} else if plan.EnMDPath != "" {
+		if _, se := os.Stat(plan.EnMDPath); se == nil {
+			input = plan.EnMDPath
+		}
 	}
 	h, e = fileHash(input)
 	if e != nil || h != m.InputHash {
@@ -220,6 +240,8 @@ func (p *Pipeline) reusableArchiveParse(plan *ArchivePlan) bool {
 	if m.ConfigFingerprint != p.configFingerprint() {
 		return false
 	}
+	// 职责分离红线：SourceHash 始终核对 plan.SourcePath（未改动原件），
+	// InputHash 核对结构规整后落盘的实际输入（PDF 与经规整的非 PDF 均优先指向 EnMDPath）。
 	h, e := fileHash(plan.SourcePath)
 	if e != nil || h != m.SourceHash {
 		return false

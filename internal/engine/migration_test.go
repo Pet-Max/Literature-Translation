@@ -1,6 +1,5 @@
-// migration_test.go — 历史格式回归：以历史基线实现在黄金
-// 样本上的输出为基准（internal/engine/testdata/*.json 为基线
-// 录制产物），逐字节核对当前引擎行为。
+// migration_test.go — 基线格式回归：以 internal/engine/testdata/*.json 中的
+// 黄金测试集为基准，逐字节核对当前引擎行为。
 package engine
 
 import (
@@ -102,7 +101,7 @@ func TestFreezerGolden(t *testing.T) {
 			}
 		}
 
-		// spans（rune 坐标，Python 字符坐标）
+		// spans（UTF-8 rune 字符坐标）
 		var wantSpans [][2]int
 		raw, _ := json.Marshal(entry["spans"])
 		if err := json.Unmarshal(raw, &wantSpans); err != nil {
@@ -209,17 +208,17 @@ func TestCheckpointsJSONL(t *testing.T) {
 
 	dir := t.TempDir()
 
-	// 1) 读 Python 写的断点文件：指纹一致、哈希匹配才可复用
-	pyFile := filepath.Join(dir, "py.jsonl")
-	if err := os.WriteFile(pyFile, []byte(wantJSONL), 0o644); err != nil {
+	// 1) 读黄金基线断点文件：指纹一致、哈希匹配才可复用
+	goldenFile := filepath.Join(dir, "golden.jsonl")
+	if err := os.WriteFile(goldenFile, []byte(wantJSONL), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p, err := NewProgress(pyFile, key)
+	p, err := NewProgress(goldenFile, key)
 	if err != nil {
-		t.Fatalf("加载 Python 断点: %v", err)
+		t.Fatalf("加载黄金断点: %v", err)
 	}
 	if !p.Reusable(0, chunks[0]) || !p.Reusable(1, chunks[1]) || !p.Reusable(2, chunks[2]) {
-		t.Fatal("Python 写入的完成段应全部可复用")
+		t.Fatal("黄金断点中的已完成段应全部可复用")
 	}
 	if zh, ok := p.Done(1); !ok || zh != "第二段重试成功：ΛΩψ。" {
 		t.Fatalf("Done(1) = %q, %v", zh, ok)
@@ -229,18 +228,18 @@ func TestCheckpointsJSONL(t *testing.T) {
 		t.Fatal("源文本被修改后不应复用")
 	}
 	// 指纹不一致 → 整体作废 + 文件删除
-	pWrong, err := NewProgress(pyFile, "wrong-key")
+	pWrong, err := NewProgress(goldenFile, "wrong-key")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if pWrong.Reusable(0, chunks[0]) || pWrong.Reusable(2, chunks[2]) {
 		t.Fatal("指纹不一致时不应复用任何段")
 	}
-	if _, err := os.Stat(pyFile); !os.IsNotExist(err) {
+	if _, err := os.Stat(goldenFile); !os.IsNotExist(err) {
 		t.Fatal("指纹不一致后断点文件应被删除")
 	}
 
-	// 2) Go 写同样序列 → 行内容与 Python 写的逐行一致（行尾 \r\n 归一）
+	// 2) Go 写同样序列 → 行内容与黄金基线逐行一致（行尾 \r\n 归一）
 	goFile := filepath.Join(dir, "go.jsonl")
 	pg, err := NewProgress(goFile, key)
 	if err != nil {
@@ -303,7 +302,7 @@ func TestPromptGolden(t *testing.T) {
 			raw, _ := json.Marshal(c["glossary"])
 			json.Unmarshal(raw, &glossary)
 		}
-		// Python 端 None → Go 空串；入参含空格填充，BuildSystem 内部 strip
+		// 空规则/空用户规则占位输入；入参含空格填充，BuildSystem 内部修剪空白
 		sysIn, _ := c["system"].(string)
 		userIn, _ := c["user"].(string)
 		got := BuildSystem(glossary, sysIn, userIn)

@@ -89,13 +89,17 @@ func friendlyCode(r apiResp) error {
 
 // ParsePDF 全流程解析一个 PDF，workDir 为本次任务的工作目录。
 // modelVersion: "vlm"（精准，默认）或 "pipeline"（快速）。
+// language: 源文档 OCR 语言代码，空值默认 "en"。
 // onState 回调用于向 UI 报进度（state: pending/running/done…）。
-func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
+func ParsePDF(ctx context.Context, token, pdfPath, modelVersion, language, workDir string,
 	onState func(state string)) (*Result, error) {
-	return parsePDF(ctx, token, pdfPath, modelVersion, workDir, onState, baseURL, pollEvery, pollTimeout)
+	return parsePDF(ctx, token, pdfPath, modelVersion, language, workDir, onState, baseURL, pollEvery, pollTimeout)
 }
 
-func parsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string, onState func(string), apiBase string, interval, timeout time.Duration) (*Result, error) {
+func parsePDF(ctx context.Context, token, pdfPath, modelVersion, language, workDir string, onState func(string), apiBase string, interval, timeout time.Duration) (*Result, error) {
+	if strings.TrimSpace(language) == "" {
+		language = "en"
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -115,7 +119,7 @@ func parsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 		"enable_formula": true,
 		"enable_table":   true,
 		"model_version":  modelVersion,
-		"language":       "en",
+		"language":       language,
 		"files": []map[string]any{{
 			"name":    filepath.Base(pdfPath),
 			"is_ocr":  false, // 自动判断，扫描件 MinerU 会自行 OCR
@@ -260,19 +264,23 @@ func parsePDF(ctx context.Context, token, pdfPath, modelVersion, workDir string,
 // ParseFilesBatch 一次批次解析多个 PDF（探针窗口与片解析共用）：宽容
 // 模式——条目级失败不中止批次，逐条目回报结果与错误（探针调用方视
 // 条目失败为整体降级；片解析调用方对失败片单独重试）。服务端并行
-// 解析，墙钟时间 = 最慢片而非各片之和。onState 按条目序号回报状态。
-func ParseFilesBatch(ctx context.Context, token string, pdfPaths []string, modelVersion, workDir string,
+// 解析，墙钟时间 = 最慢片而非各片之和。language 空值默认 "en"。
+// onState 按条目序号回报状态。
+func ParseFilesBatch(ctx context.Context, token string, pdfPaths []string, modelVersion, language, workDir string,
 	onState func(idx int, state string)) ([]*Result, []error, error) {
-	return parseFilesBatch(ctx, token, pdfPaths, modelVersion, workDir, onState,
+	return parseFilesBatch(ctx, token, pdfPaths, modelVersion, language, workDir, onState,
 		baseURL, pollEvery, pollTimeout, true)
 }
 
 // parseFilesBatch 批次解析公共实现。tolerant=false（探针）时条目失败
 // 直接中止批次；tolerant=true（片解析）时逐条目记入 itemErrs，其余
 // 条目照常解析发布。全局性失败（申请/上传/网络轮询故障）两种模式
-// 都整批中止。
-func parseFilesBatch(ctx context.Context, token string, pdfPaths []string, modelVersion, workDir string,
+// 都整批中止。language 空值默认 "en"。
+func parseFilesBatch(ctx context.Context, token string, pdfPaths []string, modelVersion, language, workDir string,
 	onState func(idx int, state string), apiBase string, interval, timeout time.Duration, tolerant bool) ([]*Result, []error, error) {
+	if strings.TrimSpace(language) == "" {
+		language = "en"
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -306,7 +314,7 @@ func parseFilesBatch(ctx context.Context, token string, pdfPaths []string, model
 		"enable_formula": true,
 		"enable_table":   true,
 		"model_version":  modelVersion,
-		"language":       "en",
+		"language":       language,
 		"files":          files,
 	}
 	var apply apiResp

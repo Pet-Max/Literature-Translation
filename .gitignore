@@ -28,7 +28,8 @@ go.work.sum
 .zcode/
 
 # ============ 本地文档（仅本机留存，不入库） ============
-changelog.md
+/CHANGELOG.md
+/changelog.md
 
 # ============ 操作系统与编辑器杂物 ============
 Thumbs.db
@@ -40,5 +41,10 @@ Desktop.ini
 # ============ Windows 保留名坑：>nul 重定向在特殊环境会落地成真实文件 ============
 nul
 nul/
-output/
+/output/
 *.bak
+
+# ============ 运行时本机配置、队列与归档目录（含凭据与本地文献，不入库） ============
+/config.json
+/queue.json
+/Literature Library/

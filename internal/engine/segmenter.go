@@ -45,11 +45,13 @@ func Split(text string, maxChars int) []string {
 
 	lines := strings.Split(text, "\n")
 
-	// 第一步：按标题行切成"节"（标题 + 后续内容直到下一标题）
+	// 第一步：按标题行切成"节"（标题 + 后续内容直到下一标题），围栏代码块内的 # 注释不切
 	sections := [][]string{{}}
+	inFence, fenceMark := false, ""
 	for _, line := range lines {
+		inFence, fenceMark = updateFenceState(strings.TrimSpace(line), inFence, fenceMark)
 		last := len(sections) - 1
-		if headingRe.MatchString(line) && len(sections[last]) > 0 {
+		if !inFence && headingRe.MatchString(line) && len(sections[last]) > 0 {
 			sections = append(sections, []string{line})
 		} else {
 			sections[last] = append(sections[last], line)
@@ -77,7 +79,7 @@ func Split(text string, maxChars int) []string {
 
 	for _, section := range sections {
 		joined := strings.Join(section, "\n")
-		blocks := blockSplitRe.Split(strings.Trim(joined, "\n"), -1)
+		blocks := splitSectionBlocks(joined)
 		for _, block := range blocks {
 			if strings.TrimSpace(block) == "" {
 				continue
@@ -105,6 +107,54 @@ func Split(text string, maxChars int) []string {
 	}
 	flush()
 	return chunks
+}
+
+// updateFenceState 按 CommonMark 围栏规则更新围栏状态：
+// 反引号开行不得在信息串内含反引号（排除单行行内代码 ```code```），
+// 波浪线开行不得在信息串内含 ~~~，闭合行须只包含同类围栏字符。
+func updateFenceState(trimmed string, inFence bool, fenceMark string) (bool, string) {
+	if !strings.HasPrefix(trimmed, "```") && !strings.HasPrefix(trimmed, "~~~") {
+		return inFence, fenceMark
+	}
+	mark := trimmed[:3]
+	if !inFence {
+		rest := strings.TrimLeft(trimmed, mark[:1])
+		if (mark == "```" && strings.Contains(rest, "`")) ||
+			(mark == "~~~" && strings.Contains(rest, "~~~")) {
+			return false, ""
+		}
+		return true, mark
+	}
+	if mark == fenceMark && strings.Trim(trimmed, mark[:1]) == "" {
+		return false, ""
+	}
+	return inFence, fenceMark
+}
+
+// splitSectionBlocks 按空行将单节正文拆为块，但保留围栏代码块（``` / ~~~）内部的空行，
+// 防止多空行代码块被拆散跨入不同翻译段。
+func splitSectionBlocks(joined string) []string {
+	lines := strings.Split(strings.Trim(joined, "\n"), "\n")
+	var blocks []string
+	var cur []string
+	inFence, fenceMark := false, ""
+	flushCur := func() {
+		if len(cur) > 0 {
+			blocks = append(blocks, strings.Join(cur, "\n"))
+			cur = nil
+		}
+	}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		inFence, fenceMark = updateFenceState(trimmed, inFence, fenceMark)
+		if !inFence && trimmed == "" {
+			flushCur()
+			continue
+		}
+		cur = append(cur, line)
+	}
+	flushCur()
+	return blocks
 }
 
 // hardSplit 超长单块的硬切：优先在换行处断开。

@@ -6,9 +6,9 @@ import (
 )
 
 // TestAnchorFunctionWordGate 上下文锚定的功能词闸：PDF 文本层里的两字母
-// 物理符号（BN/Ni/Hf…）都在词表里，无闸时漂移区会把 and/of/for 类功能词
-// 改成符号碎片（一本书实测约 70 处）。闸后：碎片目标与功能词源词
-// （编辑距离>1）一律不替换；真词损伤（Cornwal→Cornwall）不受影响。
+// 物理符号（BN/Ni/Hf…）进入词表后，漂移区可能把 and/of/for 类功能词
+// 误替换为符号碎片。闸后：碎片目标与功能词源词（编辑距离>1）一律不替换；
+// 非功能词的真词损伤修复（Cornwal→Cornwall）不受影响。
 func TestAnchorFunctionWordGate(t *testing.T) {
 	orig := "the signal and the noise differ markedly in scale while bn the phase stays stable. " +
 		"Cornwall hosted the workshop on mesoscopic transport. " +

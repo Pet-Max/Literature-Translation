@@ -20,8 +20,9 @@ type Term struct {
 
 // MinerU 配置解析服务。
 type MinerU struct {
-	Token        string `json:"token"`         // mineru.net「API 管理」页自建的 Token
-	ModelVersion string `json:"model_version"` // "vlm"（精准，默认）或 "pipeline"（快速）
+	Token        string `json:"token"`              // mineru.net「API 管理」页自建的 Token
+	ModelVersion string `json:"model_version"`      // "vlm"（精准，默认）或 "pipeline"（快速）
+	Language     string `json:"language,omitempty"` // OCR 源文档语言代码，默认 "en"
 }
 
 // LLM 配置翻译模型，任意 OpenAI 兼容接口。
@@ -37,6 +38,8 @@ type LLM struct {
 // TestDefaultRulesMatchesEngine 锁定）。
 // 作为「物理」预设的初始文案（出厂生效），也是「物理」预设「恢复默认」
 // 的还原源（其余预设与新建预设以 GeneralRules 为基线）。
+// 红线：DefaultRules 逐字节参与 BuildCacheKey 任务指纹计算，禁止未同步变更
+// 措辞或标点（修改任何字符必须同步更新 engine.IronRules）。
 const DefaultRules = "你是一名物理学/学术文献翻译引擎。把用户消息中的 Markdown 学术文本翻译成简体中文，严格遵守：\n\n" +
 	"1. 只翻译自然语言文字；⟦F1⟧、⟦F2⟧ 这类 ⟦F数字⟧ 占位符（代表公式、代码、图片）必须原样保留：一个不能少、一个不能改、位置不能移动，也不要试图翻译或解读占位符内容。\n" +
 	"2. Eq. (5)、Fig. 3、Table 1、Ref. [12]、arXiv:2306.00417、附录编号 S IV 等引用编号保留原样，不要翻译 Eq./Fig. 等标记。\n" +
@@ -188,12 +191,11 @@ func (c *Config) FindUserFont(internal string) *UserFont {
 // DataDirName 本应用的用户数据目录名（%APPDATA% 下）。
 const DataDirName = "Literature Translation"
 
-// legacyDataDirNames 历史数据目录名（按迁移优先级）；首次运行新版时整体搬移一次。
+// legacyDataDirNames 旧版数据目录名（按迁移优先级）；首次运行新版时整体搬移一次。
 var legacyDataDirNames = []string{"Literature-Translation", "fanyi"}
 
-// DataDir 返回 %APPDATA%\Literature Translation。若存在历史目录（上一版
-// 的连字符名或最初的 fanyi）且新目录尚未创建，则整体改名搬移（一次性
-// 迁移，幂等；失败不阻塞——之后按全新配置走，用户仍可手动搬回）。
+// DataDir 返回 %APPDATA%\Literature Translation。若存在历史数据目录且新目录
+// 尚未创建，则按优先级整体改名搬移（一次性迁移，幂等；失败不阻塞）。
 func DataDir() (string, error) {
 	appData := os.Getenv("APPDATA")
 	if appData == "" {
@@ -379,7 +381,7 @@ func (c *Config) Save() error {
 	return err
 }
 
-// normalize 修正越界与空值。
+// Normalize 规范化、修剪并修正越界配置项及遗留字段迁移。
 func (c *Config) Normalize() {
 	if c.GlossaryRows != nil {
 		c.Glossary = []Term{}
@@ -402,6 +404,7 @@ func (c *Config) Normalize() {
 	if c.MinerU.ModelVersion != "pipeline" {
 		c.MinerU.ModelVersion = "vlm"
 	}
+	c.MinerU.Language = strings.TrimSpace(c.MinerU.Language)
 	c.LLM.Model = strings.TrimSpace(c.LLM.Model)
 	c.LLM.BaseURL = strings.TrimRight(strings.TrimSpace(c.LLM.BaseURL), "/")
 	if c.LLM.Concurrency < 1 {
@@ -487,10 +490,15 @@ func (c *Config) ValidateAndReport() []string {
 	if strings.TrimSpace(c.MinerU.Token) == "" {
 		missing = append(missing, "MinerU Token 未配置（设置 → 服务连接）")
 	}
+	return append(missing, c.ValidateLLMAndReport()...)
+}
+
+// ValidateLLMAndReport 仅检查翻译模型 API 是否配置完整（供不依赖 MinerU 的纯 MD 翻译使用）。
+func (c *Config) ValidateLLMAndReport() []string {
 	if strings.TrimSpace(c.LLM.BaseURL) == "" || strings.TrimSpace(c.LLM.APIKey) == "" || strings.TrimSpace(c.LLM.Model) == "" {
-		missing = append(missing, "模型 API 地址 / API Key / 模型名未配置完整（设置 → 服务连接）")
+		return []string{"模型 API 地址 / API Key / 模型名未配置完整（设置 → 服务连接）"}
 	}
-	return missing
+	return nil
 }
 
 func cleanCredential(s string) string {

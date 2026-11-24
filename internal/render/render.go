@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/extension"
@@ -37,13 +38,14 @@ func AssetsSub() fs.FS {
 
 // Options 控制最终 HTML 组装。
 type Options struct {
-	Title       string // 文档标题（取文件名）
-	FontCSS     string // 正文 font-family 声明
-	UserFontCSS string // 用户导入字体的 @font-face 片段（空=无）
-	EnBg        string // 双语对照英文引用块配色预设键，空或 paper=默认米白
-	ZhBg        string // 中文正文纸色/墨色预设键，空或 paper=白纸黑墨现状
-	TOC         bool   // 是否生成目录
-	TwoColumn   bool   // 双栏排版
+	Title        string // 文档标题（取文件名）
+	NoCoverTitle bool   // 禁止将首个一级标题提取为居中封面标题（供分段打印续段使用）
+	FontCSS      string // 正文 font-family 声明
+	UserFontCSS  string // 用户导入字体的 @font-face 片段（空=无）
+	EnBg         string // 双语对照英文引用块配色预设键，空或 paper=默认米白
+	ZhBg         string // 中文正文纸色/墨色预设键，空或 paper=白纸黑墨现状
+	TOC          bool   // 是否生成目录
+	TwoColumn    bool   // 双栏排版
 }
 
 // Build 把 Markdown 转为完整可打印的 HTML 文档（不含 KaTeX 脚本挂载）。
@@ -53,11 +55,12 @@ func Build(md string, opt Options) string {
 }
 
 // BuildStats 排版构建的清洗统计：Fixes 为规则命中明细（次数口径），
-// Affected 为命中过至少一条规则的公式数（公式口径）——一条公式可同时
-// 命中多条规则，命中次数可能大于公式数。
+// Affected 为命中过至少一条规则的公式数（公式口径），RawHTMLOmitted 为
+// 被 goldmark 安全转义过滤掉的原始 HTML 块数量。
 type BuildStats struct {
-	Fixes    TexFixStats
-	Affected int
+	Fixes          TexFixStats
+	Affected       int
+	RawHTMLOmitted int
 }
 
 // BuildWithStats 同 Build，但额外返回 TeX 清洗统计。
@@ -67,14 +70,20 @@ func BuildWithStats(md string, opt Options) (string, BuildStats) {
 	fx := &texFixer{stats: TexFixStats{}}
 	// 封面标题优先取 MD 自身的一级标题（译文的真实标题），
 	// 并从正文移除避免与 doc-title 重复；没有一级标题才退回文件名。
+	// 协同红线：分段打印的第 2+ 段必须传 NoCoverTitle=true，防止后续章标题 H1 被
+	// 误抽成居中封面标题；第 0 段若因无标题省略 <nav class="toc">，injectFullTOC
+	// 依赖 <article class="content"> 锚点将整本目录插入正文前。
 	title := strings.TrimSpace(opt.Title)
-	if m := firstH1Re.FindStringSubmatchIndex(md); m != nil {
-		if t := strings.TrimSpace(md[m[2]:m[3]]); t != "" {
-			title = t
-			md = strings.TrimLeft(md[m[1]:], "\n")
+	if !opt.NoCoverTitle {
+		if m := firstH1Re.FindStringSubmatchIndex(md); m != nil {
+			if t := strings.TrimSpace(md[m[2]:m[3]]); t != "" {
+				title = t
+				md = strings.TrimLeft(md[m[1]:], "\n")
+			}
 		}
 	}
 	body := markdownToHTML(md, fx)
+	rawOmitted := strings.Count(body, "<!-- raw HTML omitted -->")
 	toc := ""
 	if opt.TOC {
 		toc = buildTOC(body)
@@ -110,22 +119,26 @@ func BuildWithStats(md string, opt Options) (string, BuildStats) {
 		"\n.mfrac .frac-line,.overline .overline-line{transform:scaleY(0.6);transform-origin:bottom}" +
 		"\nbody{font-family:" + font + "}\n" + opt.UserFontCSS + "\n</style>\n")
 	b.WriteString("</head>\n<body>\n")
-	b.WriteString("<h1 class=\"doc-title\">" + title + "</h1>\n")
+	if title != "" && !opt.NoCoverTitle {
+		b.WriteString("<h1 class=\"doc-title\">" + title + "</h1>\n")
+	}
 	if toc != "" {
 		b.WriteString("<nav class=\"toc\"><div class=\"toc-head\">目录</div>\n" + toc + "</nav>\n")
 	}
 	b.WriteString("<article class=\"content\">\n" + body + "\n</article>\n")
 	b.WriteString(scriptTag)
 	b.WriteString("</body>\n</html>\n")
-	return b.String(), BuildStats{Fixes: fx.stats, Affected: fx.affected}
+	return b.String(), BuildStats{Fixes: fx.stats, Affected: fx.affected, RawHTMLOmitted: rawOmitted}
 }
 
 // 渲染占位符使用 U+27E6/U+27E7，编号空间独立于翻译引擎。
 var (
-	fenceRe   = regexp.MustCompile("(?ms)^(?:```|~~~)[^\n]*\n.*?^(?:```|~~~)")
-	dispRe    = regexp.MustCompile(`(?s)\$\$.+?\$\$`)
-	escDollar = strings.NewReplacer(`\$`, "\x00ESC\x00")
-	unescape  = strings.NewReplacer("\x00ESC\x00", `\$`)
+	fenceRe        = regexp.MustCompile("(?ms)^(?:```|~~~)[^\n]*\n.*?^(?:```|~~~)")
+	dispRe         = regexp.MustCompile(`(?s)\$\$.+?\$\$`)
+	inlineRenderRe = regexp.MustCompile(`\$[^$\n]+?\$`)
+	renderPhRe     = regexp.MustCompile(`⟦M\d+⟧`)
+	escDollar      = strings.NewReplacer(`\$`, "\x00ESC\x00")
+	unescape       = strings.NewReplacer("\x00ESC\x00", `\$`)
 )
 
 // 上下标（MinerU 用行内 HTML 表达：作者角标 <sup>2</sup>、化学式
@@ -174,13 +187,15 @@ func stripQuotePrefix(s string) string {
 // fx 承接公式清洗命中统计，nil 安全。
 func markdownToHTML(md string, fx *texFixer) string {
 	freezeMap := map[string]string{}
+	// 预检输入是否自带 ⟦M 前缀，避免每次冻结公式都执行全文字符串扫描（保持 O(1) 编号生成）。
+	hasSentinel := strings.Contains(md, "⟦M")
 	n := 0
 	freezeSpan := func(s string) string {
 		var key string
 		for {
 			n++
 			key = fmt.Sprintf("⟦M%d⟧", n)
-			if !strings.Contains(md, key) {
+			if !hasSentinel || !strings.Contains(md, key) {
 				break
 			}
 		}
@@ -188,10 +203,8 @@ func markdownToHTML(md string, fx *texFixer) string {
 		return key
 	}
 	add := func(s string) string {
-		for key := range freezeMap {
-			if strings.Contains(s, key) {
-				return s
-			}
+		if strings.Contains(s, "⟦M") {
+			return s
 		}
 		return freezeSpan(s)
 	}
@@ -207,7 +220,7 @@ func markdownToHTML(md string, fx *texFixer) string {
 	// （围栏正则锚定行首，带前缀本就不命中，无需处理）。
 	text = fenceRe.ReplaceAllStringFunc(text, add)
 	text = dispRe.ReplaceAllStringFunc(text, func(s string) string { return add(stripQuotePrefix(s)) })
-	text = regexp.MustCompile(`\$[^$\n]+?\$`).ReplaceAllStringFunc(text, add)
+	text = replaceInlineMathRender(text, add)
 	text = supRe.ReplaceAllStringFunc(text, freezeSpan)
 	text = subRe.ReplaceAllStringFunc(text, freezeSpan)
 	text = unescape.Replace(text)
@@ -225,15 +238,97 @@ func markdownToHTML(md string, fx *texFixer) string {
 	}
 	out := buf.String()
 
-	// 外层后冻结，按编号逆序恢复；不重新扫描恢复出的原文字面占位符。
-	// 编号在创建时避开原文，因此每个键只会展开一次，循环有明确上界。
-	for i := n; i > 0; i-- {
-		key := fmt.Sprintf("⟦M%d⟧", i)
-		if raw, ok := freezeMap[key]; ok {
-			out = strings.ReplaceAll(out, key, restoreMath(key, raw, fx))
+	// 正则单趟线性回填（外层 sup/sub 内含公式时最多补扫一趟），保持与文档长度和
+	// 公式总数呈线性时间复杂度，避免长文档场景下的 O(N²) 退化。
+	for pass := 0; pass < 4 && strings.Contains(out, "⟦M"); pass++ {
+		changed := false
+		out = renderPhRe.ReplaceAllStringFunc(out, func(key string) string {
+			if raw, ok := freezeMap[key]; ok {
+				changed = true
+				return restoreMath(key, raw, fx)
+			}
+			return key
+		})
+		if !changed {
+			break
 		}
 	}
 	return out
+}
+
+// replaceInlineMathRender 在跳过货币符号误匹配后逐个冻结行内公式。
+func replaceInlineMathRender(text string, sub func(string) string) string {
+	var b strings.Builder
+	pos := 0
+	for pos < len(text) {
+		loc := inlineRenderRe.FindStringIndex(text[pos:])
+		if loc == nil {
+			b.WriteString(text[pos:])
+			break
+		}
+		start, end := pos+loc[0], pos+loc[1]
+		if isCurrencyPairRender(text, start, end) {
+			b.WriteString(text[pos : end-1])
+			pos = end - 1
+			if pos <= start {
+				pos = start + 1
+			}
+			continue
+		}
+		b.WriteString(text[pos:start])
+		b.WriteString(sub(text[start:end]))
+		pos = end
+	}
+	return b.String()
+}
+
+// isCurrencyPairRender 识别渲染侧误跨行货币符号对（如 "$50 to $100"、"$50 ($x+1$)"、"$50-$100"），
+// 与 engine.isCurrencyPair 保持一致的货币与纯数公式边界。
+func isCurrencyPairRender(s string, start, end int) bool {
+	if end-start < 4 {
+		return false
+	}
+	first := s[start+1]
+	if first < '0' || first > '9' {
+		return false
+	}
+	prev, _ := utf8.DecodeLastRuneInString(s[start+1 : end-1])
+	trailingSep := prev == ' ' || prev == '\t' || prev == '(' || prev == '[' || prev == '（' || prev == '"' || prev == '“'
+	trailingDigit := end < len(s) && s[end] >= '0' && s[end] <= '9'
+	if !trailingSep && !trailingDigit {
+		return false
+	}
+	hasSpace := false
+	for i := start + 1; i < end-1; i++ {
+		switch s[i] {
+		case ' ', '\t':
+			hasSpace = true
+		case '\\', '^', '_', '=', '<', '>', '{', '}', '|', '+', '*', '/':
+			return false
+		}
+	}
+	if hasSpace {
+		return true
+	}
+	interior := s[start+1 : end-1]
+	if trailingDigit {
+		for _, dash := range []string{"-", "–", "—"} {
+			if strings.HasSuffix(interior, dash) {
+				numPart := strings.TrimSuffix(interior, dash)
+				if numPart == "" {
+					return false
+				}
+				for i := 0; i < len(numPart); i++ {
+					c := numPart[i]
+					if (c < '0' || c > '9') && c != ',' && c != '.' {
+						return false
+					}
+				}
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // restoreMath 把单个冻结区段还原为 HTML（代码块/ KaTeX 占位 span/上下标）。
@@ -290,11 +385,15 @@ var headingRe = regexp.MustCompile(`<h([1-3]) id="([^"]*)"[^>]*>(.*?)</h[1-3]>`)
 // firstH1Re 匹配 MD 开头（允许前导空行）的一级标题。
 var firstH1Re = regexp.MustCompile(`\A\s*#\s+(.+)`)
 
-// buildTOC 从生成的 HTML 里抓 h1-h3 构建目录（缩进按层级）。
+// buildTOC 从生成的 HTML 里抓 h1-h3 构建目录（缩进按层级）。无标题时返回空串。
 func buildTOC(body string) string {
+	matches := headingRe.FindAllStringSubmatch(body, -1)
+	if len(matches) == 0 {
+		return ""
+	}
 	var b strings.Builder
 	b.WriteString("<ul>\n")
-	for _, m := range headingRe.FindAllStringSubmatch(body, -1) {
+	for _, m := range matches {
 		level := int(m[1][0] - '0')
 		id, text := m[2], m[3]
 		indent := ""

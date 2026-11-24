@@ -107,7 +107,7 @@ func RelocateReferences(md string) (string, int) {
 	return strings.Join(out, "\n\n") + suffix, displaced
 }
 
-// splitBlocks 按空行切块（与 segmenter 的 blockSplitRe 同一把正则）。
+// splitBlocks 复用 blockSplitRe 按空行切块。
 func splitBlocks(md string) []string {
 	locs := blockSplitRe.FindAllStringIndex(md, -1)
 	blocks := make([]string, 0, len(locs)+1)

@@ -1,9 +1,9 @@
-// events_golden_test.go — 历史进度事件与任务指纹兼容性回归：
+// events_golden_test.go — 进度事件与任务指纹兼容性回归：
 // 在相同 mock LLM、相同输入、concurrency=1 下，进度事件流与最终结果
-// 须与历史基线实现逐字段一致；任务指纹 BuildCacheKey 与历史哈希
-// 算法逐字节一致（旧归档进度文件因此继续可用）。
+// 须与黄金基线契约逐字段一致；任务指纹 BuildCacheKey 与既有哈希
+// 算法逐字节一致（既有归档进度文件因此继续可用）。
 //
-// 黄金文件为基线实现的录制产物。事件比较忽略键序与 "event":"progress" 包装。
+// 黄金文件为基线契约的录制产物。事件比较忽略键序与 "event":"progress" 包装。
 package engine
 
 import (

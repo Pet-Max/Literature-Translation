@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -159,13 +160,25 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 	)
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, allocOpts...)
 	defer cancelAlloc()
-	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx)
+	browserCtx, cancelBrowser := chromedp.NewContext(allocCtx, chromedp.WithErrorf(func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		// 忽略新版 Chromium/Edge 新增 IPAddressSpace 值导致的无害 cdproto 反序列化刷屏
+		if strings.Contains(msg, "unknown IPAddressSpace value") {
+			return
+		}
+		log.Printf("%s", msg)
+	}))
 	defer cancelBrowser()
-	// 整本直出限时 6 分钟（已知成功样本 4-5 分钟）。超限即视为整本打印
-	// 规模类失败，由调用方（pipeline.export）走分段打印回退——再长的
-	// 预算也只会白等，920 页书在部分机器状态下整本直出永远出不来。
+	// 整本直出限时 6 分钟。超限即视为整本打印规模类失败，由调用方
+	// （pipeline.export）转为分段打印回退，避免在无法完成的超大文档上无谓等待。
 	runCtx, cancelRun := context.WithTimeout(browserCtx, 6*time.Minute)
 	defer cancelRun()
+
+	// 公式渲染等待预算随公式规模自适应（30s..90s），防万级公式文档在慢机上误超时
+	ktxPollTimeout := 30*time.Second + time.Duration(strings.Count(htmlContent, `class="ktx`)/250)*time.Second
+	if ktxPollTimeout > 90*time.Second {
+		ktxPollTimeout = 90 * time.Second
+	}
 
 	var ktxStatsJSON string
 	written := outPDF
@@ -175,7 +188,7 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 		network.SetExtraHTTPHeaders(network.Headers{"X-Lit-Token": token}),
 		chromedp.Navigate(url),
 		chromedp.Poll(`window.__ktxDone === true`, nil,
-			chromedp.WithPollingTimeout(30*time.Second)),
+			chromedp.WithPollingTimeout(ktxPollTimeout)),
 		// 打印前由 Go 侧再驱动两轮适配（字体晚到时布局会变，页面自身
 		// 的定时器可能已经停了）：宽公式 → 宽表格/代码块 → 打印期公式
 		// 第二阶段（无下限续缩，见 render.js fitPrintFormulas 注释）
@@ -202,8 +215,7 @@ func PrintPDF(ctx context.Context, workDir, htmlContent, outPDF, userFontsDir st
 			}
 			// 降级放行：个别公式解析失败不再否决整个任务——失败公式已在
 			// 页面上以红字源码呈现（render.js 的 catch 路径），PDF 照常
-			// 产出。此前的一票否决会让一本 500 页的书因十几个坏公式
-			// （扫描件上 MinerU 提取损伤很常见）整任务失败且无产物。
+			// 产出，避免长文档因局部受损公式而整任务失败无产物。
 			if ktxStats.N > 0 && logf != nil {
 				// 双语对照下同一坏公式在英文引用行与中文行各渲染一次、
 				// 错误串相同——去重条数才对应「独立坏公式」数

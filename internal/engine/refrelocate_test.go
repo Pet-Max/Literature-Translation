@@ -172,7 +172,7 @@ func TestRelocateMultiEntryBlock(t *testing.T) {
 	}
 }
 
-// TestRelocateTrailingBlanks 文末空行不得破坏幂等（P1），也不得丢失原结尾。
+// TestRelocateTrailingBlanks 文末空行不得破坏幂等，也不得丢失原结尾。
 func TestRelocateTrailingBlanks(t *testing.T) {
 	tail := strings.Join([]string{ref1, ref2, ref3}, "\n\n")
 	// (a) 文献已在文末 + 末尾空行 → 原样返回
@@ -192,7 +192,7 @@ func TestRelocateTrailingBlanks(t *testing.T) {
 	}
 }
 
-// TestRelocateTailFeaturelessRef 尾部特征缺失的文献不触发误归位（P2）。
+// TestRelocateTailFeaturelessRef 尾部特征缺失的文献不触发误归位。
 func TestRelocateTailFeaturelessRef(t *testing.T) {
 	f4 := `[4] A featureless tail entry whose year was lost in parsing.`
 	md := "Body.\n\n" + strings.Join([]string{ref1, ref2, ref3}, "\n\n") + "\n\n" + f4

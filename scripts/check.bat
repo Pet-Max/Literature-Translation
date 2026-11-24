@@ -1,7 +1,7 @@
 @echo off
 REM check.bat - one-shot health check: static analysis + Go tests (incl.
 REM pipeline E2E with in-process Go engine + mock LLM) + frontend E2E.
-REM v1.2.0: translation engine is pure Go - no Python/ruff steps anymore.
+REM Run Go tests, static checks, and workflow lint.
 setlocal
 cd /d "%~dp0.."
 set FAILED=0

@@ -22,7 +22,14 @@
 // 序列）再建词表，否则 "eﬀects" 会被切成 "e"+"ects" 毒化词表，拼写校准
 // 对 ff/fi 类损伤整体失效。
 //
-// 公式 $…$、代码块、<img>/<table> 标签受保护，不做任何改写。
+// 公式 $…$、代码块、行内代码、URL 与内联 HTML 标签在词级修复阶段受冻结保护，不做改写
+// （HTML 表格与残余 <eq> 会先无损转换为 Markdown 结构后再参与符号校准）。
+//
+// 规则准入不变量（修改任何规则前必须同时满足，由 invariants_test.go 锁定）：
+//  1. 清洁恒等性：输入与原 PDF 文本层完全一致时不得误伤合法跨学科文本；
+//  2. 严格幂等性：Calibrate(Calibrate(x)) == Calibrate(x)，不得出现多趟震荡；
+//  3. 保护区隔离：围栏代码、行内反引号、URL 与公式在对应阶段逐字节不可变；
+//  4. 跨学科安全：保护驼峰/全大写标识符、技术代码与非物理合法数学写法。
 package repair
 
 import (
@@ -62,15 +69,15 @@ func (st *Stats) detail(msg string) {
 var (
 	wordRe     = regexp.MustCompile(`[A-Za-z]{2,}`)
 	fenceRe    = regexp.MustCompile("(?ms)^(?:```|~~~)[^\n]*\n.*?^(?:```|~~~)")
+	codeSpanRe = regexp.MustCompile("``[^`\n]+``|`[^`\n]+`")
 	dispRe     = regexp.MustCompile(`(?s)\$\$.+?\$\$`)
 	inlineRe   = regexp.MustCompile(`\$[^$\n]+?\$`)
 	tagRe      = regexp.MustCompile(`</?[A-Za-z][^>]*>`)
 	tokenSplit = regexp.MustCompile(`[^A-Za-z]+`)
 )
 
-// urlRe Markdown 链接/图片 与裸 URL。URL 里合法的词片段（如域名
-// openxlab.org.cn 的 "org"）绝不能进词级修复——V4 验证中 399 处图片
-// CDN 的 org 被上下文锚定改成 "or"，链接全坏。
+// urlRe 匹配 Markdown 链接/图片及裸 URL。链接域名中的短词（如
+// example.org.cn 的 "org"）绝不能进入词级修复。
 var urlRe = regexp.MustCompile(`!?\[[^\]]*\]\([^)]*\)|https?://[^\s)<>"']+`)
 
 // Options 控制启用哪些校准层，两层独立开关：
@@ -104,21 +111,48 @@ type Result struct {
 	Stats Stats
 }
 
-// Calibrate 完整校准，按 opt 分层门控：表格/重音符/符号修复 → 伪行间
-// 公式升级 → 上下文锚定 → 拼写规则。origText 为原 PDF 文本层（内部先
-// 归一，重复归一幂等）。表格转换与重音符合成不受开关门控：它们是
-// 无损的结构性还原，且是后续所有修复的前提（HTML 表格里的 <eq> 公式
-// 要先落成 $…$ 才有符号修复）。
+// NormalizeStructure 仅执行无损结构性还原（HTML 表格→Markdown 管道表、
+// 残余 <eq>→$…$、散文级上下标解包），同时保护围栏代码块与行内代码不变。
+// 纯结构还原在干净文档上逐字节不变，供扫描件（无文本层）、关闭校准及
+// 独立 MD 翻译/导出路径共用，避免 HTML 表格在 goldmark 渲染时静默丢失。
+func NormalizeStructure(md string) (string, Stats) {
+	var st Stats
+	text := normalizeStructureWithStats(md, &st)
+	return text, st
+}
+
+func normalizeStructureWithStats(md string, st *Stats) string {
+	prot := map[string]string{}
+	n := 0
+	keep := func(s string) string {
+		if strings.ContainsRune(s, 0) {
+			return s
+		}
+		n++
+		key := fmt.Sprintf("\x00S%d\x00", n)
+		prot[key] = s
+		return key
+	}
+	text := fenceRe.ReplaceAllStringFunc(md, keep)
+	text = codeSpanRe.ReplaceAllStringFunc(text, keep)
+	text = tablesToMarkdown(text, st)
+	text = eqToMath(text, st)
+	text = unwrapProseSupSub(text, st)
+	return unfreeze(text, prot)
+}
+
+// Calibrate 完整校准，按 opt 分层门控：结构还原 → 重音符合成 → 符号修复 →
+// 伪行间公式升级 → 上下文锚定 → 拼写规则。origText 为原 PDF 文本层（内部先
+// 归一，重复归一幂等）。结构还原不受开关门控：它是无损还原，且是后续
+// 修复的前提（HTML 表格里的 <eq> 公式要先落成 $…$ 才有符号修复）。
 func Calibrate(md, origText string, opt Options) (Result, error) {
 	orig := normalizeOrig(origText)
 	vocab := BuildVocab(orig)
 	var st Stats
-	// 0) 结构性还原：HTML 表格 → Markdown 表格；残余 <eq> → $…$；
-	//    分离重音符合成；散文级上下标解包
-	text := tablesToMarkdown(md, &st)
-	text = eqToMath(text, &st)
-	text = composeAccents(text, &st)
-	text = unwrapProseSupSub(text, &st)
+	// 0) 无损结构性还原（HTML 表格 → Markdown 表格；残余 <eq> → $…$；
+	//    散文级上下标解包）+ 冻结代码/URL/公式后做分离重音符合成
+	text := normalizeStructureWithStats(md, &st)
+	text = composeMarkdownAccents(text, &st)
 	// 1) 符号修复（行内公式内容在此阶段单独处理）
 	if opt.Symbols {
 		text = fixControlChars(text, orig, &st)
@@ -129,22 +163,36 @@ func Calibrate(md, origText string, opt Options) (Result, error) {
 		text = fixMathArtifacts(text, &st)
 	}
 	// 1.5) 伪行间公式升级：必须在符号修复之后——升级成的 $$ 块会被
-	//      词级冻结且符号规则只处理行内 $…$，先升级会让独立成行的
-	//      $…$ 里的 |00i/⟩⟨ 损伤逃过修复（探针实证的顺序缺口）
+	//      词级冻结且符号规则只处理行内 $…$，若提前升级会令独立成行的
+	//      $…$ 内的符号损伤逃过修复。
 	if opt.Symbols {
 		text = promoteDisplayMath(text, &st)
 	}
-	// 2) 词级校准（公式/代码/标签冻结）：先上下文锚定（精确，可处理真词
-	//    损伤），后通用拼写规则（兜住剩余非常规词损伤）
+	// 2) 词级校准（公式/代码/标签冻结）：
+	//    红线：收敛循环内部必须保持 anchorRepair -> localContextRepair -> repairProse
+	//    固定顺序（先全局/局部真词锚定，再拼写合并/拆分/edit1），不可随意调换；
+	//    符号箭头补扫仅在文本确有改动且 Symbols 开启时执行，保证单次调用即收敛幂等。
 	if !opt.Spelling {
 		return Result{Text: text, Stats: st}, nil
 	}
+	origPairs := buildOrigPairs(orig)
 	frozen, protect := freeze(text, true)
-	frozen, suspect := anchorRepair(frozen, orig, vocab, &st)
-	frozen = localContextRepair(frozen, orig, vocab, &st, suspect)
-	frozen = repairProse(frozen, vocab, &st)
-	text = unfreeze(frozen, protect)
-	return Result{Text: text, Stats: st}, nil
+	for pass := 0; pass < 3; pass++ {
+		before := frozen
+		var suspect map[int]bool
+		frozen, suspect = anchorRepair(frozen, orig, vocab, &st)
+		frozen = localContextRepair(frozen, orig, vocab, &st, suspect)
+		frozen = repairProse(frozen, vocab, origPairs, &st)
+		if frozen == before {
+			break
+		}
+	}
+	st.Kept = dedupStrings(st.Kept)
+	repaired := unfreeze(frozen, protect)
+	if opt.Symbols && repaired != text {
+		repaired = fixArrowsInMarkdown(repaired, orig, &st)
+	}
+	return Result{Text: repaired, Stats: st}, nil
 }
 
 // Markdown 仅拼写校准（合并/拆分/编辑距离三规则），供测试直接验证词级
@@ -152,16 +200,48 @@ func Calibrate(md, origText string, opt Options) (Result, error) {
 func Markdown(md string, vocab map[string]struct{}) (Result, error) {
 	var st Stats
 	frozen, protect := freeze(md, true)
-	frozen = repairProse(frozen, vocab, &st)
+	frozen = repairProse(frozen, vocab, nil, &st)
+	st.Kept = dedupStrings(st.Kept)
 	text := unfreeze(frozen, protect)
 	return Result{Text: text, Stats: st}, nil
 }
 
-// freeze 把需保护的区段替换为 \x00N\x00 占位符。键为纯数字，不会被任何
-// 分词正则捕获（上下文对齐按 [A-Za-z]+ 取词，旧的 "P12" 形态会被捕获）。
+// buildOrigPairs 从归一化后的原文文本层提取相邻英文词二元组集合（小写、NUL 分隔），
+// 供 repairProse 对末尾单大写变量粘连拆分提供原文锚定依据。
+func buildOrigPairs(orig string) map[string]bool {
+	toks := alignTokens(orig)
+	if len(toks) < 2 {
+		return nil
+	}
+	pairs := make(map[string]bool, len(toks)-1)
+	for i := 0; i+1 < len(toks); i++ {
+		pairs[toks[i]+"\x00"+toks[i+1]] = true
+	}
+	return pairs
+}
+
+// dedupStrings 对字符串切片按首次出现顺序去重。
+func dedupStrings(xs []string) []string {
+	if len(xs) < 2 {
+		return xs
+	}
+	seen := make(map[string]struct{}, len(xs))
+	out := make([]string, 0, len(xs))
+	for _, x := range xs {
+		if _, ok := seen[x]; ok {
+			continue
+		}
+		seen[x] = struct{}{}
+		out = append(out, x)
+	}
+	return out
+}
+
+// freeze 把需保护的区段替换为 \x00N\x00 占位符。
+// 红线 1：键必须为纯数字，避免被分词正则 [A-Za-z]+ 捕获（字母前缀键曾会污染对齐）。
+// 红线 2：冻结顺序严格固定为「围栏 → 行内反引号 → URL → 行间公式 → 行内公式 → 标签」，
+// 若 URL 晚于公式类处理，链接内域名短词或参数会被当作词级/公式文本改写。
 // freezeInline 为 false 时保留行内公式（符号修复需要改写其内部内容）。
-// 顺序：围栏 → URL → 行间公式 → 行内公式 → 标签。URL 必须先于公式类：
-// 图片语法 ![](…) 与公式无关，但裸链接的域名片段不能进词级修复。
 func freeze(md string, freezeInline bool) (string, map[string]string) {
 	protect := map[string]string{}
 	n := 0
@@ -177,6 +257,7 @@ func freeze(md string, freezeInline bool) (string, map[string]string) {
 		return key
 	}
 	text := fenceRe.ReplaceAllStringFunc(md, keep)
+	text = codeSpanRe.ReplaceAllStringFunc(text, keep)
 	text = urlRe.ReplaceAllStringFunc(text, keep)
 	text = dispRe.ReplaceAllStringFunc(text, keep)
 	if freezeInline {

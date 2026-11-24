@@ -48,4 +48,37 @@ func TestSplitMarkdownChunks(t *testing.T) {
 	if got := splitMarkdownChunks(huge, 800<<10, 6); len(got) > 6 {
 		t.Fatalf("段数超上限: %d", len(got))
 	}
+
+	// 均分无孤立尾段 + 围栏代码块内空行不切开
+	var fenced strings.Builder
+	for i := 0; i < 6; i++ {
+		fenced.WriteString("```python\nline_a = 1\n\nline_b = 2\n```\n\n")
+		fenced.WriteString(strings.Repeat("段落正文内容。", 12000))
+		fenced.WriteString("\n\n")
+	}
+	fChunks := splitMarkdownChunks(fenced.String(), chunkTargetBytes, chunkMaxCount)
+	if strings.Join(fChunks, "") != fenced.String() {
+		t.Fatal("带围栏切分丢失内容")
+	}
+	for i, c := range fChunks {
+		if strings.Count(c, "```")%2 != 0 {
+			t.Fatalf("第 %d 段把围栏代码块拦腰切开", i+1)
+		}
+		if len(c) < 32<<10 {
+			t.Fatalf("第 %d 段产生异常小尾段 (%d B)", i+1, len(c))
+		}
+	}
+
+	// 行首三反引号行内代码不误判为未闭合围栏（否则后续正文全被锁死不可切分）
+	if r := markdownFenceRanges("```inline()``` leads.\n\nNext paragraph."); len(r) != 0 {
+		t.Fatalf("单行三反引号行内代码不应产生围栏范围: %v", r)
+	}
+
+	// 首段无标题（未生成 <nav class="toc">）时，injectFullTOC 仍须把整本目录插到正文前
+	full := "<html><body><nav class=\"toc\"><ul><li><a href=\"#c2\">Ch2</a></li></ul></nav><article class=\"content\"><h2 id=\"c2\">Ch2</h2></article></body></html>"
+	chunkNoTOC := "<html><body><article class=\"content\"><p>Pre</p></article></body></html>"
+	injected := injectFullTOC(full, chunkNoTOC)
+	if !strings.Contains(injected, `<nav class="toc">`) || !strings.Contains(injected, `href="#c2"`) {
+		t.Fatalf("首段无目录节点时 injectFullTOC 未插入整本目录: %s", injected)
+	}
 }

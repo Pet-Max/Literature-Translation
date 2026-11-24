@@ -28,8 +28,8 @@ var PlaceholderRE = regexp.MustCompile(`⟦F(\d+)⟧`)
 // freezePatterns 各类冻结模式，顺序即冻结顺序（先长块后短块）。
 // 这些模式使用 RE2 语法，行内公式单独处理。
 var freezePatterns = []*regexp.Regexp{
-	// 围栏代码块 ```…``` 或 ~~~…~~~（可跨行）
-	regexp.MustCompile("(?sm)^(?:```|~~~).*?(?:```|~~~)$"),
+	// 围栏代码块 ```…``` 或 ~~~…~~~（可跨行，兼容 CRLF）
+	regexp.MustCompile("(?sm)^(?:```|~~~).*?(?:```|~~~)\r?$"),
 	// 行间公式 $$…$$（可跨行）
 	regexp.MustCompile(`(?s)\$\$.+?\$\$`),
 	// HTML 表格整体（MinerU 输出的表格是 HTML）
@@ -43,6 +43,73 @@ var freezePatterns = []*regexp.Regexp{
 // inlineFormulaRe 行内公式 $…$（单行内，非空；不吃 \$ 转义）。
 // 含两处 (?<!\\) 反向断言——RE2 不支持，走 regexp2。
 var inlineFormulaRe = regexp2.MustCompile(`(?<!\\)\$[^\$\n]+?(?<!\\)\$`, regexp2.None)
+
+// FindInlineMathRuns 返回 text 中（已按 []rune 索引）合法行内公式 $…$ 的 [start, end)
+// 区间，自动跳过同一行内 "$50 to $100" 这类货币金额配对误匹配。
+func FindInlineMathRuns(text string) [][2]int {
+	runes := []rune(text)
+	var out [][2]int
+	pos := 0
+	for pos < len(runes) {
+		m, _ := inlineFormulaRe.FindRunesMatchStartingAt(runes, pos)
+		if m == nil {
+			break
+		}
+		start, end := m.Index, m.Index+m.Length
+		if isCurrencyPair(runes, start, end) {
+			// 跳过前导货币 $，从闭合 $ 继续扫描后续可能的配对或真公式
+			pos = end - 1
+			if pos <= start {
+				pos = start + 1
+			}
+			continue
+		}
+		out = append(out, [2]int{start, end})
+		pos = end
+	}
+	return out
+}
+
+// isCurrencyPair 识别误跨行货币符号对（如 "$50 to $100"、"$3.50 ... $x+1$"、
+// "$50 ($x+1$)" 与连字符金额区间 "$50-$100"）。不变量：合法纯数公式（如 "$1-2$"）
+// 末尾不紧邻数字且不以分隔空白/开括号收尾，不得被误判为货币。
+func isCurrencyPair(runes []rune, start, end int) bool {
+	if end-start < 4 {
+		return false
+	}
+	first := runes[start+1]
+	if first < '0' || first > '9' {
+		return false
+	}
+	prev := runes[end-2]
+	trailingSep := prev == ' ' || prev == '\t' || prev == '(' || prev == '[' || prev == '（' || prev == '"' || prev == '“'
+	trailingDigit := end < len(runes) && runes[end] >= '0' && runes[end] <= '9'
+	if !trailingSep && !trailingDigit {
+		return false
+	}
+	hasSpace := false
+	for _, r := range runes[start+1 : end-1] {
+		switch r {
+		case ' ', '\t':
+			hasSpace = true
+		case '\\', '^', '_', '=', '<', '>', '{', '}', '|', '+', '*', '/':
+			return false
+		}
+	}
+	if hasSpace {
+		return true
+	}
+	last := runes[end-2]
+	if trailingDigit && (last == '-' || last == '–' || last == '—') {
+		for _, r := range runes[start+1 : end-2] {
+			if (r < '0' || r > '9') && r != ',' && r != '.' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
 
 // runeIndex 把字节下标换算为 rune 下标（s[:byteIdx] 必须落在字符边界）。
 func runeIndex(s string, byteIdx int) int {
@@ -69,12 +136,9 @@ func ProtectedSpans(text string) []span {
 			spans = append(spans, span{runeIndex(text, loc[0]), runeIndex(text, loc[1])})
 		}
 	}
-	// 行内公式：regexp2 的 Index 即 rune 坐标，与上面换算后的坐标系一致
-	runes := []rune(text)
-	m, _ := inlineFormulaRe.FindRunesMatch(runes)
-	for m != nil {
-		spans = append(spans, span{m.Index, m.Index + m.Length})
-		m, _ = inlineFormulaRe.FindNextMatch(m)
+	// 行内公式：FindInlineMathRuns 返回 []rune 坐标，与上面换算后的坐标系一致
+	for _, r := range FindInlineMathRuns(text) {
+		spans = append(spans, span{r[0], r[1]})
 	}
 	sort.Slice(spans, func(i, j int) bool { return spans[i].Start < spans[j].Start })
 	var merged []span
@@ -112,15 +176,27 @@ func Freeze(text string, start int) Frozen {
 	for _, pat := range freezePatterns {
 		out = pat.ReplaceAllStringFunc(out, sub)
 	}
-	// 行内公式：regexp2 逐个替换（ReplaceFunc 从头扫到尾，计数 -1 不限）
-	out2, err := inlineFormulaRe.ReplaceFunc(out, func(m regexp2.Match) string {
-		return sub(m.String())
-	}, 0, -1)
-	if err != nil {
-		// 正则引擎自身异常（理论上不会发生）：按未匹配处理，保持原文
-		out2 = out
+	// 行内公式：跳过货币配对 "$50 to $100" 后逐个替换为占位符
+	out = replaceInlineMathRuns(out, sub)
+	return Frozen{Text: out, Mapping: mapping}
+}
+
+// replaceInlineMathRuns 跳过货币误匹配后，逐个将合法行内公式替换为占位符。
+func replaceInlineMathRuns(text string, sub func(string) string) string {
+	runs := FindInlineMathRuns(text)
+	if len(runs) == 0 {
+		return text
 	}
-	return Frozen{Text: out2, Mapping: mapping}
+	runes := []rune(text)
+	var b strings.Builder
+	last := 0
+	for _, r := range runs {
+		b.WriteString(string(runes[last:r[0]]))
+		b.WriteString(sub(string(runes[r[0]:r[1]])))
+		last = r[1]
+	}
+	b.WriteString(string(runes[last:]))
+	return b.String()
 }
 
 // Unfreeze 把占位符回填为原始内容。未知编号原样保留（validator 会抓住）。

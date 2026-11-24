@@ -81,12 +81,25 @@ type TranslateResult struct {
 	OutPath        string           `json:"out_path"`
 }
 
-// 参考文献甄别：段首编号 + 序列递增 + 特征三重判定。
+// 参考文献甄别：段首编号 + 序列递增 + 特征三重判定；另支持参考节标题后的 APA/作者-年份制条目。
 var (
-	citeHeadRe       = regexp.MustCompile(`^\[(\d{1,3})\]\s`)
-	authorInitialsRe = regexp.MustCompile(`\b[A-Z]\. (\s*[A-Z]\. )+`)
-	yearRe           = regexp.MustCompile(`\((?:19|20)\d{2}[a-z]?\)`)
+	citeHeadRe          = regexp.MustCompile(`^\[(\d{1,3})\]\s`)
+	authorInitialsRe    = regexp.MustCompile(`\b[A-Z]\. (\s*[A-Z]\. )+`)
+	yearRe              = regexp.MustCompile(`\((?:19|20)\d{2}[a-z]?\)`)
+	refSectionHeadingRe = regexp.MustCompile(`(?im)^#{1,3}\s*(?:references|bibliography|works\s+cited|literature\s+cited|参考文献)\s*$`)
+	refEndHeadingRe     = regexp.MustCompile(`(?im)^#{1,2}\s+(?:appendix|acknowledg|致谢|附录)`)
 )
+
+// hasBlockProtectedSpan 判断块内是否含整块保护区段（代码围栏、行间公式、表格或图片），
+// 含保护区块的段不应被参考文献甄别器跳过。
+func hasBlockProtectedSpan(chunk string) bool {
+	for _, pat := range freezePatterns {
+		if pat.MatchString(chunk) {
+			return true
+		}
+	}
+	return false
+}
 
 // BuildCacheKey 任务指纹：规则/术语/开关/模型任一变化即弃用旧进度。
 // 与历史版本哈希算法逐字节一致（键序 bilingual/model/skip_refs/system），
@@ -117,40 +130,110 @@ func SelfCheck() error {
 	return nil
 }
 
-// refDetector 参考文献甄别器：段首 [N] + 编号单调递增 + 文献特征 → 文献条目。
-// 防误伤三重保险：编号必须严格递增、段内须有作者缩写或年份、条目长度受限。
-// 判定必须在切段后、进入线程池前按顺序单线程执行（内部有状态）。
+// refDetector 参考文献甄别器：
+//  1. [N] 编号文献：段首 [N] + 编号单调递增（多条目块取最大编号）+ 特征 + 块保护；
+//  2. 作者-年份制文献：位于 References/Bibliography 章节标题下的纯引文段。
+//
+// 不变量：进入参考节时记录 refHeadingLevel，后续遇到任意同级或更高级别的
+// 非参考节标题（或任意级附录/致谢标题）必须立刻退出参考节，防多章文档误判后续正文。
 type refDetector struct {
-	enabled bool
-	last    int
-	started bool
+	enabled         bool
+	last            int
+	started         bool
+	inRefSection    bool
+	refHeadingLevel int
 }
 
 func newRefDetector(enabled bool) *refDetector { return &refDetector{enabled: enabled} }
+
+// atxHeadingLevel 返回 ATX 标题的层级（1..6）；非 ATX 标题行返回 0。
+func atxHeadingLevel(line string) int {
+	n := 0
+	for n < len(line) && line[n] == '#' {
+		n++
+	}
+	if n >= 1 && n <= 6 && n < len(line) && (line[n] == ' ' || line[n] == '\t') {
+		return n
+	}
+	return 0
+}
 
 func (d *refDetector) detect(chunk string) bool {
 	if !d.enabled {
 		return false
 	}
-	m := citeHeadRe.FindStringSubmatch(strings.TrimLeftFunc(chunk, unicode.IsSpace))
-	if m == nil {
-		return false
-	}
-	n, _ := strconv.Atoi(m[1])
-	if d.started {
-		if !(d.last < n && n <= d.last+refMaxGap) {
+	trimmed := strings.TrimLeftFunc(chunk, unicode.IsSpace)
+	bodyForAPA := trimmed
+	if lvl := atxHeadingLevel(trimmed); lvl > 0 {
+		firstLine := trimmed
+		if nl := strings.IndexByte(firstLine, '\n'); nl >= 0 {
+			firstLine = firstLine[:nl]
+		}
+		switch {
+		case refSectionHeadingRe.MatchString(firstLine):
+			d.inRefSection = true
+			d.refHeadingLevel = lvl
+		case refEndHeadingRe.MatchString(firstLine), d.inRefSection && lvl <= d.refHeadingLevel:
+			d.inRefSection = false
+			d.refHeadingLevel = 0
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(trimmed, firstLine))
+		if rest == "" {
 			return false
 		}
+		bodyForAPA = rest
 	}
-	if runeLen(chunk) > refMaxRunes {
+	if hasBlockProtectedSpan(chunk) {
 		return false
 	}
-	if authorInitialsRe.MatchString(chunk) || yearRe.MatchString(chunk) {
-		d.started = true
-		d.last = n
-		return true
+	if m := citeHeadRe.FindStringSubmatch(trimmed); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		if d.started {
+			if !(d.last < n && n <= d.last+refMaxGap) {
+				return false
+			}
+		}
+		if runeLen(chunk) > refMaxRunes {
+			return false
+		}
+		if authorInitialsRe.MatchString(chunk) || yearRe.MatchString(chunk) {
+			maxN := n
+			for _, sm := range refLineRe.FindAllStringSubmatch(chunk, -1) {
+				if k, err := strconv.Atoi(sm[1]); err == nil && k > maxN {
+					maxN = k
+				}
+			}
+			d.started = true
+			d.last = maxN
+			return true
+		}
+		return false
+	}
+	if d.inRefSection && !strings.HasPrefix(bodyForAPA, "#") {
+		return looksLikeAPARefs(bodyForAPA)
 	}
 	return false
+}
+
+// looksLikeAPARefs 判定纯正文段落集合是否全部符合作者-年份制参考文献格式（用于
+// 处于 References/Bibliography 节下的无编号引文列表）。
+func looksLikeAPARefs(text string) bool {
+	paras := blockSplitRe.Split(strings.TrimSpace(text), -1)
+	count := 0
+	for _, p := range paras {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if runeLen(p) > refMaxRunes {
+			return false
+		}
+		if !yearRe.MatchString(p) && !authorInitialsRe.MatchString(p) {
+			return false
+		}
+		count++
+	}
+	return count > 0
 }
 
 // TranslateContext 执行完整翻译并写出译文 MD；ctx 取消会中止全部阶段。
@@ -364,8 +447,7 @@ func TranslateContext(ctx context.Context, opts TranslateOptions) (*TranslateRes
 		acceptSegment(i, frozen, zh, chunks, progress, &mu, results, okSet)
 	}
 
-	// 有序工作池：索引经 channel FIFO 派发（对齐 ThreadPoolExecutor 的
-	// 提交序语义——并发=1 时严格按段序执行，保持既有事件顺序）。
+	// 有序工作池：索引经 FIFO channel 派发（并发=1 时严格按段序执行，保持事件顺序一致）。
 	doneCh := make(chan int, total)
 	idxCh := make(chan int)
 	var wg sync.WaitGroup
@@ -462,8 +544,8 @@ dispatch:
 		mu.Lock()
 		zh := results[i]
 		mu.Unlock()
-		if opts.Bilingual && !refFlags[i] {
-			// 文献段（原文保留）不再附加引用块，避免同段英文出现两遍
+		if opts.Bilingual && !refFlags[i] && okSet[i] {
+			// 文献段与最终失败段（均保留英文原文）不再附加引用块，避免同段英文出现两遍
 			orig := strings.TrimSpace(chunks[i])
 			zhBlock := strings.TrimSpace(zh)
 			lines := strings.Split(orig, "\n")

@@ -2,9 +2,8 @@ package render
 
 import "testing"
 
-// texfix.go 的规则锁定测试。三道准入门在此落地：
-// 恒等性（合法公式逐字节不变）、等价性（每条规则的精确输出）、
-// 幂等性（清洗两次 = 清洗一次）。真实语料对拍另在本地验证环境执行。
+// texfix.go 的规则锁定测试：覆盖恒等性（合法公式逐字节不变）、
+// 等价性（每条规则的精确输出）与幂等性（清洗两次 = 清洗一次）。
 
 // mustSame 断言清洗后逐字节相同（不命中任何规则的输入）。
 func mustSame(t *testing.T, tex string) {
@@ -102,8 +101,22 @@ func TestLeftRightPairing(t *testing.T) {
 	mustEq(t, `\left\langle x`, `\langle x`)
 	// 孤立 \right：对称剥命令保裸定界符
 	mustEq(t, `x \right| ^ { 2 }`, `x | ^ { 2 }`)
+	// 交叉重叠形态：未闭合 \left 后紧随其他结构 token 时不得发生编辑区间重叠 panic
+	mustEq(t, `\left \left ( x`, ` ( x`)
+	mustEq(t, `\begin{array}{c} \left \end{foo}`, `\begin{array}{c}  \end{array}`)
+	mustEq(t, `\left & x`, `  x`)
+	mustEq(t, `\right \end{foo}`, ` `)
+	// 剥除不可拼接成新命令：前面紧邻命令字母、后面紧邻字母时保留分隔空格
+	mustEq(t, `\lef\left t`, `\lef t`)
+	mustEq(t, `\lef\normalfont t`, `\lef t`)
+	// \\ 为转义换行符，\\tag 与 \\normalfont 不是 \tag/\normalfont 命令
+	mustSame(t, `\\tag\\tag\\\\\&tag000`)
+	mustSame(t, `\\normalfont x`)
 	// 先开先合的栈式配对：正常配对不受影响
 	mustSame(t, `\left[ \left( x \right) \right]`)
+	// 级联剥离场景（孤立 & 或嵌套 \end 被清掉后暴露出的新 \end{}）应一次收敛且幂等
+	mustEq(t, `\end&{}`, ``)
+	mustEq(t, `\end\end{}{}`, ``)
 }
 
 func TestStrayAmpersand(t *testing.T) {

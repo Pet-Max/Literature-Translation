@@ -10,11 +10,11 @@ import (
 
 // ---------------------------------------------------------------- 控制码
 
-// fixControlChars 把 MinerU 输出里的控制码（\x00–\x1F，排除制表/换行）
+// fixControlChars 把解析输出里的控制码（\x00–\x1F，排除制表/换行）
 // 按 PDF 文本层锚定还原：OT1 编码里 \x03=Λ、\x08=Φ 等（"three-level Λ
 // system" 在 MD 里是 "three-level \x03 system"）。取损伤处前后各 2 个词
-// 在原文中定位间隙字符；间隙是字母则回填，原文该处为空则删除，其余
-// （含 NUL）找不到锚时保持原样并记录。
+// 在原文中定位间隙字符；间隙是字母则回填，原文该处为空则删除；无法锚定的
+// NUL (U+0000) 直接清除（防破坏内部哨兵），其余无法锚定的控制码保持原样并记录。
 func fixControlChars(md, orig string, st *Stats) string {
 	ctrlRe := regexp.MustCompile(`[\x00-\x08\x0b\x0c\x0e-\x1f]`)
 	locs := ctrlRe.FindAllStringIndex(md, -1)
@@ -29,12 +29,13 @@ func fixControlChars(md, orig string, st *Stats) string {
 	}
 	var repls []repl
 	for _, l := range locs {
-		before := contextWords(md[:l[0]], false, 2)
-		after := contextWords(md[l[1]:], true, 2)
-		if len(before)+len(after) == 0 {
-			continue
+		before := contextWords(maskMathForContext(md[:l[0]]), false, 2)
+		after := contextWords(maskMathForContext(md[l[1]:]), true, 2)
+		n := -1
+		mid := ""
+		if len(before)+len(after) > 0 {
+			mid, n = controlAnchor(orig, before, after)
 		}
-		mid, n := controlAnchor(orig, before, after)
 		switch {
 		case n == 1:
 			repls = append(repls, repl{l[0], l[1], mid,
@@ -42,6 +43,10 @@ func fixControlChars(md, orig string, st *Stats) string {
 		case n == 0:
 			repls = append(repls, repl{l[0], l[1], "",
 				fmt.Sprintf("控制码 U+%04X 删除（原文该处无字符）", md[l[0]])})
+		case md[l[0]] == 0:
+			// NUL 字节在任何 Markdown 中都不合法，且会破坏 freeze 的 \x00 哨兵
+			repls = append(repls, repl{l[0], l[1], "",
+				"控制码 U+0000 清除（无法锚定，防 NUL 泄漏）"})
 		default:
 			st.detail(fmt.Sprintf("跳过: 控制码 U+%04X（原文锚 %v|%v 命中 %d 处）",
 				md[l[0]], before, after, n))
@@ -54,6 +59,13 @@ func fixControlChars(md, orig string, st *Stats) string {
 		st.detail(r.note)
 	}
 	return md
+}
+
+// maskMathForContext 屏蔽公式定界区内的 LaTeX 命令词，避免控制码紧邻公式时
+// 取到原文里不存在的 \ldots/l/n 等命令名造成锚定失败。
+func maskMathForContext(s string) string {
+	s = dispRe.ReplaceAllString(s, " ")
+	return inlineRe.ReplaceAllString(s, " ")
 }
 
 // controlAnchor 在原文中找 before 词与 after 词夹出的间隙字符。
