@@ -40,7 +40,7 @@ const (
 	refMinSequence = 3   // 触发归位的最少接受条目数
 )
 
-// refLineRe 块内行首 [N]（refHeadRe 的多行版，用于 R8 识别块内挤在一起的多条）。
+// refLineRe 块内行首整数编号 [N]（用于 R8 识别块内多条并推进游标）。
 var refLineRe = regexp.MustCompile(`(?m)^\[(\d{1,3})\]\s`)
 
 // refEntry 一个被接受的文献块：块下标、排序键（块内首个编号）与状态机

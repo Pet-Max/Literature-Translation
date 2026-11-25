@@ -81,13 +81,21 @@ type TranslateResult struct {
 	OutPath        string           `json:"out_path"`
 }
 
-// 参考文献甄别：段首编号 + 序列递增 + 特征三重判定；另支持参考节标题后的 APA/作者-年份制条目。
+// 参考文献甄别：段首编号 + 序列递增 + 特征三重判定；另支持参考节标题后的引文条目与编号列表。
 var (
 	citeHeadRe          = regexp.MustCompile(`^\[(\d{1,3})\]\s`)
 	authorInitialsRe    = regexp.MustCompile(`\b[A-Z]\. (\s*[A-Z]\. )+`)
 	yearRe              = regexp.MustCompile(`\((?:19|20)\d{2}[a-z]?\)`)
-	refSectionHeadingRe = regexp.MustCompile(`(?im)^#{1,3}\s*(?:references|bibliography|works\s+cited|literature\s+cited|参考文献)\s*$`)
+	refSectionHeadingRe = regexp.MustCompile(`(?im)^#{1,3}\s*(?:\d+(?:\.\d+)*\.?\s+)?(?:references?|bibliography|works\s+cited|literature\s+cited|notes\s+and\s+references|参考文献)\s*$`)
 	refEndHeadingRe     = regexp.MustCompile(`(?im)^#{1,2}\s+(?:appendix|acknowledg|致谢|附录)`)
+
+	// 仅在参考节内部（inRefSection=true）启用，避免影响正文段落判定：
+	// 兼容图书出版年份（如 (Example Press, 1981)、(1897)）、单首字母作者（如 A. Author）、
+	// 姓前置引文（Surname, A.）、arXiv/DOI，以及 [1.1] / 1. 编号列表。
+	refSectionYearRe    = regexp.MustCompile(`(?:\(|,\s*)(?:18|19|20)\d{2}[a-z]?(?:\)|\.|,|\s|$)`)
+	refSectionAuthorRe  = regexp.MustCompile(`(?:(?:^|[\s,(;])[A-Z](?:\.?-[A-Z])?\.\s+(?:(?:de|del|della|di|du|la|le|van|von|der|den)\s+){0,2}\p{Lu}\p{L}+|\b\p{Lu}\p{L}+(?:-\p{Lu}?\p{L}+)*,\s+[A-Z]\.)`)
+	refSectionIdRe      = regexp.MustCompile(`(?i)\b(?:arXiv:\d{4}\.\d+|10\.\d{4,9}/\S+)`)
+	refSectionNumLineRe = regexp.MustCompile(`^(?:\[\d{1,3}(?:\.\d{1,3})?\]|\d{1,3}\.)\s`)
 )
 
 // hasBlockProtectedSpan 判断块内是否含整块保护区段（代码围栏、行间公式、表格或图片），
@@ -132,9 +140,10 @@ func SelfCheck() error {
 
 // refDetector 参考文献甄别器：
 //  1. [N] 编号文献：段首 [N] + 编号单调递增（多条目块取最大编号）+ 特征 + 块保护；
-//  2. 作者-年份制文献：位于 References/Bibliography 章节标题下的纯引文段。
+//  2. 参考节条目：位于 References/Bibliography 等标题下的作者-年份制、单首字母/图书出版年份、
+//     arXiv/DOI、[N]/[N.M]/1. 编号列表以及逐行符合特征的超长多行编号文献块。
 //
-// 不变量：进入参考节时记录 refHeadingLevel，后续遇到任意同级或更高级别的
+// 不变量：进入参考节时记录 refHeadingLevel 并重置编号游标，后续遇到任意同级或更高级别的
 // 非参考节标题（或任意级附录/致谢标题）必须立刻退出参考节，防多章文档误判后续正文。
 type refDetector struct {
 	enabled         bool
@@ -163,7 +172,7 @@ func (d *refDetector) detect(chunk string) bool {
 		return false
 	}
 	trimmed := strings.TrimLeftFunc(chunk, unicode.IsSpace)
-	bodyForAPA := trimmed
+	refBody := trimmed
 	if lvl := atxHeadingLevel(trimmed); lvl > 0 {
 		firstLine := trimmed
 		if nl := strings.IndexByte(firstLine, '\n'); nl >= 0 {
@@ -173,6 +182,9 @@ func (d *refDetector) detect(chunk string) bool {
 		case refSectionHeadingRe.MatchString(firstLine):
 			d.inRefSection = true
 			d.refHeadingLevel = lvl
+			// 新参考节重置编号状态机，防止多章图书下一章重新从 [1] 编号时断链
+			d.started = false
+			d.last = 0
 		case refEndHeadingRe.MatchString(firstLine), d.inRefSection && lvl <= d.refHeadingLevel:
 			d.inRefSection = false
 			d.refHeadingLevel = 0
@@ -181,22 +193,15 @@ func (d *refDetector) detect(chunk string) bool {
 		if rest == "" {
 			return false
 		}
-		bodyForAPA = rest
+		refBody = rest
 	}
 	if hasBlockProtectedSpan(chunk) {
 		return false
 	}
 	if m := citeHeadRe.FindStringSubmatch(trimmed); m != nil {
 		n, _ := strconv.Atoi(m[1])
-		if d.started {
-			if !(d.last < n && n <= d.last+refMaxGap) {
-				return false
-			}
-		}
-		if runeLen(chunk) > refMaxRunes {
-			return false
-		}
-		if authorInitialsRe.MatchString(chunk) || yearRe.MatchString(chunk) {
+		seqOK := !d.started || (d.last < n && n <= d.last+refMaxGap)
+		if seqOK && runeLen(chunk) <= refMaxRunes && (authorInitialsRe.MatchString(chunk) || yearRe.MatchString(chunk)) {
 			maxN := n
 			for _, sm := range refLineRe.FindAllStringSubmatch(chunk, -1) {
 				if k, err := strconv.Atoi(sm[1]); err == nil && k > maxN {
@@ -207,17 +212,28 @@ func (d *refDetector) detect(chunk string) bool {
 			d.last = maxN
 			return true
 		}
-		return false
+		// 仅节外在此直接拒绝；处于参考节内部时继续回落到 looksLikeRefSectionBody 核验
+		if !d.inRefSection {
+			return false
+		}
 	}
-	if d.inRefSection && !strings.HasPrefix(bodyForAPA, "#") {
-		return looksLikeAPARefs(bodyForAPA)
+	if d.inRefSection && !strings.HasPrefix(refBody, "#") {
+		return looksLikeRefSectionBody(refBody)
 	}
 	return false
 }
 
-// looksLikeAPARefs 判定纯正文段落集合是否全部符合作者-年份制参考文献格式（用于
-// 处于 References/Bibliography 节下的无编号引文列表）。
-func looksLikeAPARefs(text string) bool {
+// hasRefSectionFeature 判断参考节内的单条或单段是否含常见引文特征。
+func hasRefSectionFeature(s string) bool {
+	return authorInitialsRe.MatchString(s) ||
+		refSectionYearRe.MatchString(s) || refSectionAuthorRe.MatchString(s) ||
+		refSectionIdRe.MatchString(s)
+}
+
+// looksLikeRefSectionBody 判定处于参考节标题下的段集合是否全部为文献条目：
+// 支持 APA/作者-年份制、单首字母作者、出版年份、(章.条) 与 1. 编号列表，
+// 并支持由单个超长多行编号列表构成但逐行符合特征的文献块。
+func looksLikeRefSectionBody(text string) bool {
 	paras := blockSplitRe.Split(strings.TrimSpace(text), -1)
 	count := 0
 	for _, p := range paras {
@@ -226,9 +242,23 @@ func looksLikeAPARefs(text string) bool {
 			continue
 		}
 		if runeLen(p) > refMaxRunes {
-			return false
+			lines := splitLines(p)
+			if len(lines) <= 1 {
+				return false
+			}
+			for _, ln := range lines {
+				ln = strings.TrimSpace(ln)
+				if ln == "" {
+					continue
+				}
+				if !refSectionNumLineRe.MatchString(ln) || runeLen(ln) > refMaxRunes || !hasRefSectionFeature(ln) {
+					return false
+				}
+			}
+			count++
+			continue
 		}
-		if !yearRe.MatchString(p) && !authorInitialsRe.MatchString(p) {
+		if !hasRefSectionFeature(p) {
 			return false
 		}
 		count++
@@ -370,7 +400,12 @@ func TranslateContext(ctx context.Context, opts TranslateOptions) (*TranslateRes
 			if ctx.Err() != nil {
 				return "", false
 			}
-			resp, err := client.CompleteContext(ctx, system, userMsg, 0.1, history)
+			// 首译取 0.1 求稳；校验重试略升至 0.2，帮助模型跳出确定性重复错误
+			temp := 0.1
+			if attempt > 1 {
+				temp = 0.2
+			}
+			resp, err := client.CompleteContext(ctx, system, userMsg, temp, history)
 			if err != nil {
 				// LLMError：网络层已重试仍失败或确定性失败（4xx 等）
 				logf("第 %d 段调用失败：%v", i+1, err)

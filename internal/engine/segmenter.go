@@ -24,8 +24,8 @@ import (
 // ^ 即行首，语义一致；validator 在整篇文本上使用时 (?m) 必需。
 var headingRe = regexp.MustCompile(`(?m)^#{1,6}\s`)
 
-// refHeadRe 文献条目段首（[N] 开头）。
-var refHeadRe = regexp.MustCompile(`^\[\d{1,3}\]\s`)
+// refHeadRe 文献条目段首（[N] 或章内编号 [N.M] 开头）。
+var refHeadRe = regexp.MustCompile(`^\[\d{1,3}(?:\.\d{1,3})?\]\s`)
 
 // blockSplitRe 空行分块。
 var blockSplitRe = regexp.MustCompile(`\n\s*\n`)
@@ -85,7 +85,7 @@ func Split(text string, maxChars int) []string {
 				continue
 			}
 			if refHeadRe.MatchString(block) {
-				// 文献条目（[N] 开头）独立成段：不被前后文打包，
+				// 文献条目（[N] 或 [N.M] 开头）独立成段：不被前后文打包，
 				// 便于上层逐条甄别（保留原文或单独翻译）
 				flush()
 			}

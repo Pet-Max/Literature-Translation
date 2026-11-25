@@ -5,6 +5,6 @@
 // frontend/dist/index.html，并按 build.bat 头部说明重生成 syso。
 package version
 
-const Version = "v1.4.1"
+const Version = "v1.4.2"
 
 func Display() string { return Version }

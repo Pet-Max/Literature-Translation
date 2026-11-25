@@ -759,10 +759,22 @@ function flashSaved(i) {
 
 async function saveRuleText(i) {
   const preset = presets()[i];
+  if (!preset) return;
   const ta = document.querySelector("#rule-list [data-rtext]");
   const text = ta ? ta.value : presets()[i].draft_text ?? presets()[i].text;
   if (!text.trim() || [...text].length > RULES_MAX) {
     await showModal({icon:"warn", title:"规则尚不能应用", body:`正文应为 1–${RULES_MAX} 个字符；草稿会保留，请修改后再应用。`}); return;
+  }
+  // 缺少占位符说明时仅作二次确认而非硬拦截，保留用户完全自定义自由度
+  if (!text.includes("⟦F")) {
+    const choice = await showModal({
+      icon: "warn",
+      title: "规则未包含占位符说明",
+      body: "当前正文未提及 <code>⟦F数字⟧</code> 占位符保留要求，可能导致含公式、代码或图片的段落频繁重试失败。确定仍要应用吗？",
+      buttons: [{ label: "继续编辑" }, { label: "仍要应用", kind: "ghost" }],
+    });
+    if (choice !== 1) return;
+    if (presets()[i] !== preset) return;
   }
   presets()[i].text = text; delete presets()[i].draft_text;
   CFG.rules.active = presets()[i].name;
@@ -1082,7 +1094,7 @@ function appendLog(line) {
 
 // 自绘模态框：替代原生 confirm/alert（原生弹窗会显示 wails.localhost 来源）。
 // showModal({icon:'warn'|'bad', title, body, buttons:[{label, kind}]}) → Promise<按钮下标>；
-// Esc = -1、Enter = 主按钮。样式走主题令牌，深浅自适应。
+// Esc = -1、Enter = 首个按钮（下标 0）。样式走主题令牌，深浅自适应。
 function showModal(opt) {
   return new Promise((resolve) => {
     const scrim = $("modal-scrim");

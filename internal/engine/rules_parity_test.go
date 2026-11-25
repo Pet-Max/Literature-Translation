@@ -1,9 +1,7 @@
-// rules_parity_test.go — 规则一致性锚点：GUI 侧默认规则全文
-// （config.DefaultRules）与引擎侧兜底文案（IronRules）逐字一致，
-// 曾出现措辞漂移，改任一侧必须同步另一侧。
-// 放在 engine 包：config 是低层包，其测试不应反向依赖本包。
-// 既有规则正文已由 migration_test 的黄金基线校验
-// 逐字节锁死，此处传递锚定。
+// rules_parity_test.go — 默认规则一致性回归测试：锁定配置默认规则
+// （config.DefaultRules）与引擎侧兜底文案（IronRules）逐字节一致，
+// 并与 prompt_golden.json 协同确保任一侧修改时同步更新另一侧与提示词基线。
+// 放在 engine 包：config 是基础配置包，其测试不反向依赖本包。
 package engine
 
 import (
