@@ -143,13 +143,6 @@ body{
 .dropzone.wails-drop-target-active{background:var(--accent-tint)}
 .dropzone:hover .dz-icon,.dropzone.wails-drop-target-active .dz-icon{transform:translateY(-3px)}
 .dropzone:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-/* 队列非空时收窄拖放区高度，为任务列表留出视口空间 */
-.dropzone.compact{
-  flex-direction:row;justify-content:center;gap:10px;
-  padding:13px 20px;margin-bottom:18px;
-}
-.dropzone.compact .dz-icon{width:20px;height:20px}
-.dropzone.compact .dz-hint{font-size:12.5px}
 .dz-icon{width:32px;height:32px;transition:transform .3s var(--spring)}
 .dz-hint{text-align:center;font-size:13.5px;letter-spacing:.2px}
 .dz-hint strong{color:var(--ink);font-weight:600}

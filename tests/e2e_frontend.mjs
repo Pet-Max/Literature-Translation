@@ -1054,7 +1054,7 @@ console.log("\n[22] UI 布局与新增交互回归");
     const pausedBar = document.querySelectorAll("#task-T_LONG .segbar i.paused").length;
     const warnEta = document.querySelectorAll("#task-T_LONG .seg-cap .eta").length;
     const splitTag = document.querySelector("#task-T_LONG .meta-tag")?.textContent || "";
-    const compactDz = document.querySelector("#dropzone")?.classList.contains("compact");
+    const keepExpandedDz = !document.querySelector("#dropzone")?.classList.contains("compact");
     const renderPausedChip = document.querySelector("#task-T_PAUSED_RENDER .status-chip")?.textContent;
     const renderPausedStep = document.querySelector("#task-T_PAUSED_RENDER .stp.paused")?.textContent || "";
     const renderSegBarCount = document.querySelectorAll("#task-T_PAUSED_RENDER .segbar").length;
@@ -1064,7 +1064,7 @@ console.log("\n[22] UI 布局与新增交互回归");
     return {
       codeFits: code.scrollWidth <= code.clientWidth + 1 && tile.getBoundingClientRect().width <= 56,
       stepperSingleLine: steps.length === 5 && steps.every(h => h <= 24),
-      pausedChip, pausedBar, warnEta, splitTag, compactDz,
+      pausedChip, pausedBar, warnEta, splitTag, keepExpandedDz,
       renderPausedChip, renderPausedStep, renderSegBarCount,
       zeroPausedChip, zeroPausedStep, zeroSegCount,
     };
@@ -1074,7 +1074,7 @@ console.log("\n[22] UI 布局与新增交互回归");
   ok("暂停态保留状态徽章与分段断点", layoutCheck.pausedChip === "已暂停" && layoutCheck.pausedBar > 0 && layoutCheck.warnEta === 0);
   ok("排版暂停态显示排版断点且不误显翻译进度条", layoutCheck.renderPausedChip === "已暂停" && layoutCheck.renderPausedStep.includes("排版") && layoutCheck.renderSegBarCount === 0, JSON.stringify(layoutCheck));
   ok("零段已译的翻译暂停态保留翻译断点与分段条", layoutCheck.zeroPausedChip === "已暂停" && layoutCheck.zeroPausedStep.includes("翻译") && layoutCheck.zeroSegCount === 34, JSON.stringify(layoutCheck));
-  ok("任务卡显示分片预告标签且拖放区收窄", layoutCheck.splitTag.includes("312 页") && layoutCheck.compactDz);
+  ok("任务卡显示分片预告标签且拖放区保持原尺寸", layoutCheck.splitTag.includes("312 页") && layoutCheck.keepExpandedDz);
 
   await p.click('.nav-item[data-view="logs"]');
   ok("日志复制按钮保留在 log-wrap 原位", await p.locator(".log-wrap > #btn-copy-log").count() === 1);

@@ -298,7 +298,6 @@ function renderQueue() {
     QUEUE_STATE = st;
     const list = $("queue-list");
     list.innerHTML = tasks.map(taskCard).join("");
-    $("dropzone").classList.toggle("compact", tasks.length > 0);
     $("queue-count").textContent = tasks.length + " 个任务";
     $("nav-task-count").textContent = String(tasks.filter((t) => t.status !== "完成" && t.status !== "失败").length);
     $("queue-empty").style.display = tasks.length ? "none" : "block";
