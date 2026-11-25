@@ -46,9 +46,11 @@ type Task struct {
 	Done       int        `json:"done"`
 	Total      int        `json:"total"`
 	Failed     int        `json:"failed"`
-	DoneIdx    []int      `json:"done_idx"`   // 已完成段的 0 基编号（前端逐段着色）
-	FailedIdx  []int      `json:"failed_idx"` // 失败段的 0 基编号
-	Sweeping   bool       `json:"sweeping"`   // 正处收尾补翻阶段
+	DoneIdx    []int      `json:"done_idx"`        // 已完成段的 0 基编号（前端逐段着色）
+	FailedIdx  []int      `json:"failed_idx"`      // 失败段的 0 基编号
+	Sweeping   bool       `json:"sweeping"`        // 正处收尾补翻阶段
+	Pages      int        `json:"pages,omitempty"` // 入队预检回填的总页数（仅 PDF）
+	Parts      int        `json:"parts,omitempty"` // 入队预检估算的分片数量（仅超限 PDF）
 	RefsKept   int        `json:"refs_kept"`
 	OutPDF     string     `json:"out_pdf"`
 	ZHMD       string     `json:"zh_md"`
@@ -271,6 +273,19 @@ func (q *TaskQueue) Mutate(fn func(*Task)) (Task, bool) {
 	}
 	fn(q.current)
 	return *q.current, true
+}
+
+// MutateByID 按任务 ID 在队列锁内更新任意任务（用于入队预检等异步元数据回填）。
+func (q *TaskQueue) MutateByID(id string, fn func(*Task)) (Task, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, t := range q.tasks {
+		if t.ID == id {
+			fn(t)
+			return *t, true
+		}
+	}
+	return Task{}, false
 }
 
 // ClearFinished 清掉已完成/失败的任务卡片。

@@ -501,3 +501,50 @@ func TestRecoveryBlocksBackendAndFontResources(t *testing.T) {
 		}
 	}
 }
+
+func TestMinerULanguagePatchAndFontRemove(t *testing.T) {
+	a := settingsApp(t)
+	c, err := a.UpdateSettings(patchJSON(t, `{"mineru":{"language":"ch"}}`))
+	if err != nil || c.MinerU.Language != "ch" {
+		t.Fatalf("language patch failed: %+v err=%v", c, err)
+	}
+	c, err = a.UpdateSettings(patchJSON(t, `{"mineru":{"language":""}}`))
+	if err != nil || c.MinerU.Language != "" {
+		t.Fatalf("language reset failed: %+v err=%v", c, err)
+	}
+
+	const source = `C:\Windows\Fonts\simhei.ttf`
+	if _, err := os.Stat(source); err != nil {
+		t.Skip("no local CJK font fixture")
+	}
+	uf, err := a.FontAdd(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetFontPreset("custom", uf.InternalName); err != nil {
+		t.Fatal(err)
+	}
+	next, err := a.FontRemove(uf.InternalName)
+	if err != nil {
+		t.Fatalf("FontRemove failed: %v", err)
+	}
+	if len(next.UserFonts) != 0 || next.Export.FontPreset != "lxgw" || next.Export.UserFont != "" {
+		t.Fatalf("FontRemove did not reset preset: %+v", next.Export)
+	}
+
+	// 验证字体物理文件被占用无法删除时：配置已成功解绑则返回告警而非报错，避免重试死循环
+	uf2, err := a.FontAdd(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fdir, _ := fonts.Dir()
+	locked, err := os.Open(filepath.Join(fdir, uf2.FileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	next2, err := a.FontRemove(uf2.InternalName)
+	locked.Close()
+	if err != nil || len(next2.UserFonts) != 0 {
+		t.Fatalf("FontRemove with locked file should succeed config unbind and warn: err=%v fonts=%+v", err, next2.UserFonts)
+	}
+}

@@ -274,4 +274,16 @@ func TestPauseNowCancelsCurrent(t *testing.T) {
 	if !q2.IsPaused() {
 		t.Fatal("无进行中任务时 PauseNow 应暂停队列")
 	}
+
+	q4 := NewTaskQueue(func(*Task) error { return nil })
+	tk4, err := q4.Add("pdf", `D:\tmp\big.pdf`, "auto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated, ok := q4.MutateByID(tk4.ID, func(x *Task) { x.Pages = 320; x.Parts = 2 }); !ok || updated.Pages != 320 || updated.Parts != 2 {
+		t.Fatalf("MutateByID failed: ok=%v updated=%+v", ok, updated)
+	}
+	if _, ok := q4.MutateByID("missing", func(x *Task) {}); ok {
+		t.Fatal("MutateByID should return false for unknown id")
+	}
 }

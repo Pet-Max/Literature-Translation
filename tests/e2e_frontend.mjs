@@ -71,7 +71,7 @@ console.log("\n[1] 初始渲染");
   ok("模拟路径不含控制字符", mockPaths.every(value => !/[\u0000-\u001f]/.test(value)));
   ok("任务计数文案", (await page.locator("#queue-count").textContent()) === "4 个任务");
   ok("默认模式=自动", await page.locator('.mode-btn[data-mode="auto"]').evaluate((el) => el.classList.contains("active")));
-  await until(() => page.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.5")));
+  await until(() => page.locator("#sidebar-status").textContent().then((t) => t.includes("v1.4.3")));
   ok("版本状态显示已配置", (await page.locator("#sidebar-status").textContent()).includes("已配置"));
 }
 
@@ -165,7 +165,7 @@ console.log("\n[3] 设置视图");
   await until(() => page.locator("#about-status").evaluate((el) => !el.hidden));
   ok("检查更新行内状态=已是最新", (await page.locator("#about-status").textContent())=== "✓ 已是最新");
   ok("检查成功时无独立结果行", await page.locator("#update-result").isHidden());
-  ok("当前版本行填充", (await page.locator("#about-version").textContent()).includes("v1.0.5"));
+  ok("当前版本行填充", (await page.locator("#about-version").textContent()).includes("v1.4.3"));
 }
 
 // ============ [4] 日志视图 ============
@@ -282,7 +282,7 @@ console.log("\n[8] FontList→null 回归");
   page2.on("pageerror", (e) => errors2.push(String(e)));
   await page2.goto(PAGE_URL + "?fontnull", { waitUntil: "load" });
   // 修复后 null 按空列表处理：应用照常走完初始化链，状态栏到达「已配置」
-  await until(() => page2.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.5")));
+  await until(() => page2.locator("#sidebar-status").textContent().then((t) => t.includes("v1.4.3")));
   const st2 = await page2.locator("#sidebar-status").textContent();
   ok("null 字体列表下状态正常", st2.includes("已配置"), st2);
   ok("状态栏无「启动中/异常」残留", !st2.includes("启动中") && !st2.includes("异常"), st2);
@@ -298,7 +298,7 @@ console.log("\n[9] 检查更新失败路径");
   const page3 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   await page3.addInitScript(() => { try { localStorage.clear(); } catch {} });
   await page3.goto(PAGE_URL + "?updatefail", { waitUntil: "load" });
-  await until(() => page3.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.5")));
+  await until(() => page3.locator("#sidebar-status").textContent().then((t) => t.includes("v1.4.3")));
   await page3.click('.nav-item[data-view="settings"]');
   await until(() => page3.locator("#view-settings").evaluate((el) => el.classList.contains("active")));
   await page3.click("#btn-check-update");
@@ -310,7 +310,7 @@ console.log("\n[9] 检查更新失败路径");
   const page4 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   await page4.addInitScript(() => { try { localStorage.clear(); } catch {} });
   await page4.goto(PAGE_URL, { waitUntil: "load" });
-  await until(() => page4.locator("#sidebar-status").textContent().then((t) => t.includes("v1.0.5")));
+  await until(() => page4.locator("#sidebar-status").textContent().then((t) => t.includes("v1.4.3")));
   await page4.click('.nav-item[data-view="settings"]');
   await until(() => page4.locator("#view-settings").evaluate((el) => el.classList.contains("active")));
   // 先人为暴露一个"上轮失败残留"，再点成功，验证 stale 清理
@@ -728,7 +728,7 @@ console.log("\n[14] 侧栏服务配置状态");
   await p.evaluate(()=>flushSettings());
   ok("保存成功后无需重启即显示已配置",(await status()).includes("已配置") && !(await status()).includes("就绪"));
   ok("已配置明确说明仍需验证连接与任务",(await sidebar.getAttribute("title")).includes("仍需验证"));
-  ok("状态保留版本并支持辅助技术读取",(await status()).includes("v1.0.5") && await sidebar.getAttribute("role")==="status" && await sidebar.getAttribute("aria-live")==="polite" && (await sidebar.getAttribute("aria-label")).includes("已配置"));
+  ok("状态保留版本并支持辅助技术读取",(await status()).includes("v1.4.3") && await sidebar.getAttribute("role")==="status" && await sidebar.getAttribute("aria-live")==="polite" && (await sidebar.getAttribute("aria-label")).includes("已配置"));
   await p.evaluate(()=>window.__settingsMock.delay=0);
 
   await edit({"cfg-mineru-token":'""'});await p.evaluate(()=>flushSettings());
@@ -776,7 +776,7 @@ console.log("\n[14] 侧栏服务配置状态");
   await p.evaluate(()=>applyTheme("light"));await p.waitForTimeout(200);
   await p.screenshot({path:"output/playwright/settings-sidebar-status-v7.png"});
   await p.reload({waitUntil:"load"});await until(()=>status().then(t=>t.includes("已配置")));
-  ok("重载后按持久化配置正确显示状态",(await status()).includes("已配置") && (await status()).includes("v1.0.5"));
+  ok("重载后按持久化配置正确显示状态",(await status()).includes("已配置") && (await status()).includes("v1.4.3"));
   ok("侧栏状态回归无运行时错误",errors.length===0,errors.join(" | "));
   await p.close();
 }
@@ -1002,6 +1002,114 @@ console.log("\n[21] 损坏恢复保留待保存输入与退出保护");
  ok("只有明确放弃才清除待保存队列",await p.evaluate(()=>!settingsJobs.size && MOCK_CFG.llm.model==="PENDING-MODEL"));
  ok("损坏恢复无前端运行时错误",errors.length===0,errors.join(" | "));
  await p.close();
+}
+
+// ============ [22] UI 布局精修与新增交互回归 ============
+console.log("\n[22] UI 布局与新增交互回归");
+{
+  const p = await browser.newPage({ viewport: { width: 880, height: 600 } });
+  const errors = []; p.on("pageerror", e => errors.push(String(e)));
+  await p.goto(PAGE_URL, { waitUntil: "load" });
+  await until(() => p.evaluate(() => window.__settingsMock.ready));
+
+  await p.evaluate(() => {
+    MOCK_TASKS.splice(0, MOCK_TASKS.length,
+      {
+        id: "T_LONG", code: "Quantum", kind: "pdf",
+        source_path: "D:\\Demo\\Library\\Quantum_Information_And_Quantum_Computation_2026.pdf",
+        status: "等待", stage: "翻译已暂停（已完成 12/34 段）",
+        done: 12, total: 34, failed: 0, pages: 312, parts: 2, refs_kept: 0,
+        out_pdf: "", zh_md: "", work_dir: "", err: "",
+      },
+      {
+        id: "T_DONE", code: "L001", kind: "pdf",
+        source_path: "D:\\Demo\\Library\\L001_example.pdf",
+        status: "完成", stage: "完成",
+        done: 37, total: 37, failed: 0, refs_kept: 26,
+        out_pdf: "D:\\Demo\\Library\\L001\\out.pdf", zh_md: "", work_dir: "D:\\Demo\\Library\\L001", err: "",
+      },
+      {
+        id: "T_PAUSED_RENDER", code: "REND", kind: "pdf",
+        source_path: "D:\\Demo\\Library\\REND_example.pdf",
+        status: "等待", stage: "导出已暂停（重开将重新导出）", pause_stage: "排版中",
+        done: 37, total: 37, failed: 0, refs_kept: 12,
+        out_pdf: "", zh_md: "", work_dir: "", err: "",
+      },
+      {
+        id: "T_PAUSED_ZERO", code: "ZERO", kind: "pdf",
+        source_path: "D:\\Demo\\Library\\ZERO_example.pdf",
+        status: "等待", stage: "翻译已暂停（已完成 0/34 段）",
+        done: 0, total: 34, failed: 0, refs_kept: 0,
+        out_pdf: "", zh_md: "", work_dir: "", err: "",
+      }
+    );
+    renderQueue();
+  });
+  await until(() => p.locator("#task-T_LONG").count().then(n => n === 1));
+  const layoutCheck = await p.evaluate(() => {
+    const code = document.querySelector("#task-T_LONG .codetile-code");
+    const tile = document.querySelector("#task-T_LONG .codetile");
+    const steps = [...document.querySelectorAll("#task-T_DONE .stp")].map(s => s.getBoundingClientRect().height);
+    const pausedChip = document.querySelector("#task-T_LONG .status-chip")?.textContent;
+    const pausedBar = document.querySelectorAll("#task-T_LONG .segbar i.paused").length;
+    const warnEta = document.querySelectorAll("#task-T_LONG .seg-cap .eta").length;
+    const splitTag = document.querySelector("#task-T_LONG .meta-tag")?.textContent || "";
+    const compactDz = document.querySelector("#dropzone")?.classList.contains("compact");
+    const renderPausedChip = document.querySelector("#task-T_PAUSED_RENDER .status-chip")?.textContent;
+    const renderPausedStep = document.querySelector("#task-T_PAUSED_RENDER .stp.paused")?.textContent || "";
+    const renderSegBarCount = document.querySelectorAll("#task-T_PAUSED_RENDER .segbar").length;
+    const zeroPausedChip = document.querySelector("#task-T_PAUSED_ZERO .status-chip")?.textContent;
+    const zeroPausedStep = document.querySelector("#task-T_PAUSED_ZERO .stp.paused")?.textContent || "";
+    const zeroSegCount = document.querySelectorAll("#task-T_PAUSED_ZERO .segbar i").length;
+    return {
+      codeFits: code.scrollWidth <= code.clientWidth + 1 && tile.getBoundingClientRect().width <= 56,
+      stepperSingleLine: steps.length === 5 && steps.every(h => h <= 24),
+      pausedChip, pausedBar, warnEta, splitTag, compactDz,
+      renderPausedChip, renderPausedStep, renderSegBarCount,
+      zeroPausedChip, zeroPausedStep, zeroSegCount,
+    };
+  });
+  ok("长文件名角标不溢出", layoutCheck.codeFits, JSON.stringify(layoutCheck));
+  ok("880px 窄窗下步进器单行不折行", layoutCheck.stepperSingleLine, JSON.stringify(layoutCheck));
+  ok("暂停态保留状态徽章与分段断点", layoutCheck.pausedChip === "已暂停" && layoutCheck.pausedBar > 0 && layoutCheck.warnEta === 0);
+  ok("排版暂停态显示排版断点且不误显翻译进度条", layoutCheck.renderPausedChip === "已暂停" && layoutCheck.renderPausedStep.includes("排版") && layoutCheck.renderSegBarCount === 0, JSON.stringify(layoutCheck));
+  ok("零段已译的翻译暂停态保留翻译断点与分段条", layoutCheck.zeroPausedChip === "已暂停" && layoutCheck.zeroPausedStep.includes("翻译") && layoutCheck.zeroSegCount === 34, JSON.stringify(layoutCheck));
+  ok("任务卡显示分片预告标签且拖放区收窄", layoutCheck.splitTag.includes("312 页") && layoutCheck.compactDz);
+
+  await p.click('.nav-item[data-view="logs"]');
+  ok("日志复制按钮保留在 log-wrap 原位", await p.locator(".log-wrap > #btn-copy-log").count() === 1);
+
+  await p.click('.nav-item[data-view="settings"]');
+  await p.selectOption("#cfg-mineru-lang", "ch");
+  await p.evaluate(() => flushSettings());
+  ok("MinerU 解析语言自动保存", await p.evaluate(() => MOCK_CFG.mineru.language === "ch"));
+  await p.selectOption("#cfg-mineru-lang", "");
+  await p.evaluate(() => flushSettings());
+  ok("MinerU 解析语言切回默认清空", await p.evaluate(() => MOCK_CFG.mineru.language === ""));
+
+  const pwBtn = p.locator('[data-toggle-pw="cfg-llm-key"]');
+  ok("API Key 默认掩码", (await p.locator("#cfg-llm-key").getAttribute("type")) === "password");
+  await pwBtn.click();
+  ok("点击眼睛显示明文", (await p.locator("#cfg-llm-key").getAttribute("type")) === "text" && (await pwBtn.getAttribute("aria-pressed")) === "true");
+  await pwBtn.click();
+  ok("再次点击恢复掩码", (await p.locator("#cfg-llm-key").getAttribute("type")) === "password");
+
+  await p.click("#btn-outdir-pick");
+  await p.evaluate(() => flushSettings());
+  ok("选择目录按钮回填并自动保存", (await p.locator("#cfg-outdir").inputValue()) === "D:\\Demo\\CustomLibrary" && await p.evaluate(() => MOCK_CFG.export.output_dir === "D:\\Demo\\CustomLibrary"));
+
+  await p.click("#font-import");
+  await p.evaluate(() => flushSettings());
+  ok("选中导入字体后显示删除字体按钮", await p.locator("#font-remove").isVisible());
+  await p.click("#font-remove");
+  await until(() => p.locator("#modal-scrim").isVisible());
+  ok("删除字体弹窗具无障碍属性", (await p.locator("#modal-box").getAttribute("aria-labelledby")) === "modal-title");
+  await p.locator("#modal-btns .btn.danger").click();
+  await p.evaluate(() => flushSettings());
+  ok("确认删除后移除字体并回退默认", await p.locator("#font-remove").isHidden() && await p.evaluate(() => MOCK_CFG.user_fonts.length === 0 && MOCK_CFG.export.font_preset === "lxgw"));
+
+  ok("新增 UI 回归无运行时错误", errors.length === 0, errors.join(" | "));
+  await p.close();
 }
 
 // ------------------------------------------------ 收尾

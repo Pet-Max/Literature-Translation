@@ -104,7 +104,7 @@ func (a *App) cleanupLegacyWebviewData() {
 	}
 }
 
-// newPipeline constructs the callback template; each task supplies its own config.
+// newPipeline 构造管道回调模板；每个任务会绑定各自的配置快照。
 // 回调跑在 pipeline 的进度 goroutine 里，与 worker 并发——所有 Task
 // 字段写入一律走 queue.Mutate（队列锁内），推送的是值快照。
 func (a *App) newPipeline() (*pipeline.Pipeline, error) {
@@ -253,7 +253,7 @@ func (a *App) restoreQueue() {
 	a.queue.loadTasks(tasks)
 }
 
-// BeforeClose waits for the frontend's pending settings before normal shutdown.
+// BeforeClose 在正常退出前通知前端提交尚未落盘的设置更改。
 func (a *App) BeforeClose(ctx context.Context) bool {
 	if !a.frontendReady.Load() || a.closeAllowed.Load() {
 		return false
@@ -284,7 +284,10 @@ func (a *App) setTask(fn func(*Task)) {
 // logEmit 记一条日志并立即推给前端。必须用 pushLog 的返回值而非回读
 // logBuffer 索引：并发追加可能触发切片重建，索引读会拿到搬迁前的旧内存。
 func (a *App) logEmit(level, msg string) {
-	runtime.EventsEmit(a.ctx, "log:line", a.pushLog(level, msg))
+	line := a.pushLog(level, msg)
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "log:line", line)
+	}
 }
 
 func (a *App) pushLog(level, msg string) LogLine {
@@ -358,7 +361,7 @@ func (a *App) runTask(t *Task) error {
 	a.queue.setCancelCurrent(cancelTask)
 	defer a.queue.setCancelCurrent(nil)
 
-	// One immutable snapshot for every stage of this task.
+	// 为该任务各阶段固定同一份不可变配置快照。
 	pl := a.taskPipeline()
 	if err := pl.PrepareTask(true); err != nil {
 		return err
@@ -491,7 +494,7 @@ func (a *App) runTask(t *Task) error {
 	return nil
 }
 
-// taskPipeline binds a detached snapshot without changing the reusable callback set.
+// taskPipeline 为单次任务绑定独立的配置快照，而不改动可复用的回调集合。
 func (a *App) taskPipeline() *pipeline.Pipeline {
 	p := *a.pl
 	p.Cfg = a.GetConfig()
@@ -544,25 +547,32 @@ func (a *App) QueueAddPDF(paths []string, mode string) ([]Task, error) {
 		// 大文件在同步路径上会拖慢入队响应；预检失败不打扰，解析阶段兜底。
 		// 裸 goroutine 的 panic 会带崩整个应用（任务路径有 runTaskSafe
 		// 兜底，这里没有）——pdfium/wasm 内部异常兜底为日志
-		go func(p string) {
+		go func(id, p string) {
 			defer func() {
 				if r := recover(); r != nil {
 					a.pushLog("warn", fmt.Sprintf("入队预览异常（不影响任务）：%v", r))
 				}
 			}()
 			pages, perr := pdftext.PageCount(p)
-			if perr != nil {
+			if perr != nil || pages <= 0 {
 				return
 			}
 			var size int64
 			if st, serr := os.Stat(p); serr == nil {
 				size = st.Size()
 			}
-			if parts := pipeline.EstimateParts(pages, size); parts > 1 {
+			parts := pipeline.EstimateParts(pages, size)
+			if tk, ok := a.queue.MutateByID(id, func(x *Task) {
+				x.Pages = pages
+				x.Parts = parts
+			}); ok {
+				a.emitTask(tk)
+			}
+			if parts > 1 {
 				a.pushLog("info", fmt.Sprintf("%s：%d 页，超出单次解析上限，解析时将自动分为 %d 片接续",
 					filepath.Base(p), pages, parts))
 			}
-		}(p)
+		}(t.ID, p)
 	}
 	a.afterQueueChange()
 	return out, nil
@@ -976,6 +986,43 @@ func (a *App) PickFontFile() (string, error) {
 		Title:   "导入字体（ttf / otf）",
 		Filters: []runtime.FileFilter{{DisplayName: "字体文件 (*.ttf;*.otf)", Pattern: "*.ttf;*.otf"}},
 	})
+}
+
+// PickDirectory 打开原生文件夹选择对话框（用于设置归档根目录）。取消返回空串。
+func (a *App) PickDirectory() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择归档目录",
+	})
+}
+
+// FontRemove 移除已导入的用户字体并同步更新内存配置快照；若正在使用该字体则回退默认。
+func (a *App) FontRemove(internalName string) (*config.Config, error) {
+	a.cfgMu.Lock()
+	defer a.cfgMu.Unlock()
+	if a.configBlocked.Load() {
+		return nil, fmt.Errorf("请先恢复配置，再删除字体")
+	}
+	unregErr := fonts.Unregister(internalName)
+	var latest *config.Config
+	if err := config.WithSnapshot(func(c *config.Config) error {
+		latest = c.Clone()
+		a.cfg.Store(latest)
+		return nil
+	}); err != nil {
+		if unregErr != nil {
+			return nil, unregErr
+		}
+		return nil, err
+	}
+	if unregErr != nil {
+		// 配置解绑已落盘、仅物理文件清理失败（如文件占用）时记日志告警，避免前端误触发重试死循环
+		if latest.FindUserFont(internalName) == nil {
+			a.logEmit("warn", unregErr.Error())
+			return latest.Clone(), nil
+		}
+		return nil, unregErr
+	}
+	return latest.Clone(), nil
 }
 
 // ---------------------------------------------------------------- 其他

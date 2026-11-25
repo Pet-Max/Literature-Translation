@@ -1,5 +1,5 @@
-// testmineru_test.go — conn-test 响应判据的全矩阵哨兵：
-// 标量/数组/null/缺失/垃圾逐形态验证 parseConnTestCode 的判定，
+// testmineru_test.go — conn-test 响应判据的全矩阵测试：
+// 标量/数组/null/缺失/无效数据逐形态验证 parseConnTestCode 的判定，
 // 锁死「401/403→无效、200/0→有效、子串误判（1401）、成功数组误报」四类回归。
 package app
 

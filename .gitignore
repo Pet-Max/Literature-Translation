@@ -13,6 +13,8 @@ node_modules/
 
 # ============ 测试与剖析的本地产物 ============
 .playwright-cli/
+playwright-report/
+test-results/
 *.test
 *.out
 *.prof
@@ -26,6 +28,10 @@ go.work.sum
 
 # ============ 工具会话数据（AI 助手工作区，属个人数据） ============
 .zcode/
+.claude/
+.codex/
+.cursor/
+.gemini/
 
 # ============ 本地文档（仅本机留存，不入库） ============
 /CHANGELOG.md

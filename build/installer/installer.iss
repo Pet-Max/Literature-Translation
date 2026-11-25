@@ -1,10 +1,10 @@
 ; Literature Translation 安装器（Inno Setup 6）。
-; 由原版 package.bat 传入 AppVersion；PayloadDir 可选，默认读取原打包目录。
+; 由 package.bat 传入 AppVersion；PayloadDir 可选，默认读取打包暂存目录。
 ; 安装到用户可写目录（不弹 UAC），归档默认跟随 exe——程序与文献库自包含。
 
 #define AppName "Literature Translation"
 #ifndef AppVersion
-#define AppVersion "1.4.2"
+#define AppVersion "1.4.3"
 #endif
 #ifndef PayloadDir
 #define PayloadDir "..\package\Literature-Translation"

@@ -3,7 +3,7 @@
 //
 // 导入的字体文件在导出时由本地 HTTP 服务器挂载到 /userfonts/ 路由，
 // 渲染层用 @font-face 以内部名（UserFont-1）引用——不解析字体表里的
-// 商业字体名做 CSS family，避免命名冲突与编码坑。
+// 商业字体名做 CSS family，避免字体族命名冲突与编码兼容问题。
 package fonts
 
 import (

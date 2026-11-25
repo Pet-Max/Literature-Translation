@@ -14,11 +14,12 @@ import (
 	"literature-translation/internal/config"
 )
 
-// SettingsPatch contains only explicitly edited leaves; nil preserves the old value.
+// SettingsPatch 仅包含本次编辑显式改动的叶子字段；nil 表示保留原值。
 type SettingsPatch struct {
 	MinerU *struct {
 		Token        *string `json:"token"`
 		ModelVersion *string `json:"model_version"`
+		Language     *string `json:"language"`
 	} `json:"mineru,omitempty"`
 	LLM *struct {
 		BaseURL     *string `json:"base_url"`
@@ -50,12 +51,12 @@ type RulesPatch struct {
 	Presets *[]config.RulePreset `json:"presets,omitempty"`
 }
 
-// updateConfig serializes read/modify/persist/publish for every GUI writer.
+// updateConfig 为所有 GUI 设置写入串行执行读取、修改、落盘与快照发布。
 func (a *App) updateConfig(edit func(*config.Config) error) (*config.Config, error) {
 	return a.updateConfigWithRollback(edit, nil)
 }
 
-// latestConfig refreshes preflight state without publishing a task's old snapshot.
+// latestConfig 刷新预检配置，同时避免把运行中任务的旧快照写回全局状态。
 func (a *App) latestConfig() (*config.Config, error) {
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
@@ -100,7 +101,7 @@ func (a *App) ResetGlossaryToDefault() (*config.Config, error) {
 
 func (a *App) UpdateSettings(patch SettingsPatch) (*config.Config, error) {
 	return a.updateConfig(func(c *config.Config) error {
-		// Marshal the typed patch so false and empty strings survive, while absent leaves do not.
+		// 先按强类型补丁序列化，确保 false 与空串得以保留而未改动指针字段被忽略。
 		b, err := json.Marshal(patch)
 		if err != nil {
 			return err
@@ -109,7 +110,7 @@ func (a *App) UpdateSettings(patch SettingsPatch) (*config.Config, error) {
 		if err = json.Unmarshal(b, &fields); err != nil {
 			return err
 		}
-		// Nested pointer fields marshal as null when absent. Remove them before merging.
+		// 嵌套指针字段缺省时序列化为 null，合并前予以剔除，防止覆盖既有配置。
 		for key, raw := range fields {
 			if key == "rules" || key == "glossary_rows" {
 				continue
@@ -173,8 +174,8 @@ func validateOutputDir(value string) error {
 			if err != nil {
 				return fmt.Errorf("归档目录格式无效")
 			}
-			// OPEN_EXISTING checks directory write rights without creating a probe file or directory.
-			// For directory handles these bits mean FILE_ADD_FILE and FILE_ADD_SUBDIRECTORY.
+			// OPEN_EXISTING 在不创建探测文件或目录的前提下校验目录写入权限；
+			// 对目录句柄而言，这两项权限对应创建文件（FILE_ADD_FILE）与建子目录（FILE_ADD_SUBDIRECTORY）。
 			h, err := windows.CreateFile(name, windows.FILE_WRITE_DATA|windows.FILE_APPEND_DATA,
 				windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
 				nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
@@ -210,7 +211,7 @@ func validateTaskSettings(kind string, c *config.Config) error {
 	return nil
 }
 
-// FrontendReady enables the close handshake only once the frontend can receive events.
+// FrontendReady 在前端完成事件监听注册后才允许执行退出保存握手。
 func (a *App) FrontendReady() { a.frontendReady.Store(true) }
 func (a *App) FinishSettingsClose() {
 	a.stopQueue()

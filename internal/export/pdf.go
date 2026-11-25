@@ -1,7 +1,7 @@
-// Package export 用系统 Edge（无头）把渲染好的 HTML 打印为 PDF。
+// Package export 用系统 Edge 或 Chrome（无头）把渲染好的 HTML 打印为 PDF。
 //
 // 流程：在 127.0.0.1 随机端口起临时 HTTP 服务（根为工作目录，附
-// /assets/ 供给嵌入的 KaTeX）→ chromedp 驱动 Edge 打开 final.html →
+// /assets/ 供给嵌入的 KaTeX）→ chromedp 驱动导出浏览器打开 final.html →
 // 轮询 window.__ktxDone（KaTeX 渲染完成标志）→ page.printToPDF 落盘。
 package export
 

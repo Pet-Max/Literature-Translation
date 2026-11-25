@@ -1,4 +1,4 @@
-// One serialized writer for all settings; drafts stay in CFG/DOM, never replaced by a response.
+// 全部设置项的单一串行写入器；编辑草稿保留在 CFG/DOM 中，不被异步响应覆盖。
 const settingsJobs = new Map();
 let settingsRunning = null;
 let settingsActiveJob = null;
@@ -13,6 +13,7 @@ let closingSettings = false;
 const settingsComposing = new Set();
 const settingsFields = {
   "cfg-mineru-token": ["service", "mineru.token"], "cfg-mineru-mode": ["service", "mineru.model_version"],
+  "cfg-mineru-lang": ["service", "mineru.language"],
   "cfg-llm-url": ["service", "llm.base_url"], "cfg-llm-key": ["service", "llm.api_key"],
   "cfg-llm-model": ["service", "llm.model"], "cfg-llm-conc": ["service", "llm.concurrency"],
   "cfg-bilingual": ["layout", "export.bilingual"], "cfg-toc": ["layout", "export.toc"],
@@ -28,7 +29,7 @@ function mergeSettings(a, b) {
     ? mergeSettings(a?.[k] || {}, v) : v;
   return out;
 }
-// Compare submitted values with the last successful write, never the live editor CFG.
+// 将待提交值与最后一次已落盘快照对比，而非与当前编辑态 CFG 对比。
 function changedSettings(patch, base) {
   const out = {};
   for (const [k, v] of Object.entries(patch)) {
@@ -41,7 +42,10 @@ function changedSettings(patch, base) {
 }
 function settingsFieldValue(id) {
   const el = $(id);
-  return el.type === "checkbox" ? el.checked : id === "cfg-llm-conc" ? Number(el.value) : el.value;
+  if (el.type === "checkbox") return el.checked;
+  if (id === "cfg-llm-conc") return Number(el.value);
+  if (id === "cfg-mineru-lang" && el.value.trim().toLowerCase() === "en") return "";
+  return el.value;
 }
 function initSettingsBaseline() {
   sidebarServiceConfig = copySettings({mineru: CFG.mineru, llm: CFG.llm});
@@ -83,8 +87,11 @@ function renderSidebarStatus() {
     label = "配置未保存"; color = "var(--bad)"; detail = "服务配置保存失败，请在设置页重试。";
   }
   const sb = $("sidebar-status");
+  const clickable = Boolean(missing.length || sidebarServiceState === "error");
+  sb.classList.toggle("needs-setup", clickable);
+  sb.tabIndex = clickable ? 0 : -1;
   sb.textContent = `${sidebarVersion} `;
-  sb.title = detail;
+  sb.title = clickable ? `${detail}（点击前往设置）` : detail;
   sb.setAttribute("aria-label", `${sidebarVersion}，${label}。${detail}`);
   const dot = document.createElement("span");
   dot.className = "dot"; dot.textContent = "●"; dot.style.color = color;
@@ -95,7 +102,7 @@ function settingsState(section, state, message = "") {
   const card = section === "output-font" ? "output" : section;
   const el = $("save-" + card);
   if (!el) return;
-  // A finished write must not confirm text still being composed in this card.
+  // 若当前卡片内仍有输入法组合输入未上屏，完成态写入不立即弹出「已保存」提示。
   const composing = [...settingsComposing].some(input => input.closest(".set-card[data-section]")?.dataset.section === card);
   if (["saved", "fading"].includes(state) && composing) state = "idle";
   if (section === "service" && state !== "fading") { sidebarServiceState = state; renderSidebarStatus(); }
@@ -105,7 +112,7 @@ function settingsState(section, state, message = "") {
   else if (state === "fading") settingsStatusTimers.set(section, setTimeout(() => settingsState(section, "idle"), 500));
   let states = [{section, state, message}];
   if (card === "output") {
-    // Font and directory writes remain independent, but share one card-level status.
+    // 字体与归档目录各自独立落盘，但在输出卡片右上角共享同一处状态指示。
     outputSaveStates.set(section, states[0]);
     states = [...outputSaveStates.values()];
   }
@@ -127,7 +134,7 @@ function settingsState(section, state, message = "") {
 function queueSettings(section, patch, delay = 0, run = null) {
   if (!settingsReady) return;
   const old = settingsJobs.get(section);
-  // An in-flight value may still replace the confirmed value. Reverting it must be queued.
+  // 在途请求可能随后刷新已确认快照；若改回旧值仍需入队等待落盘校验。
   const expected = mergeSettings(settingsConfirmed, settingsActiveJob?.patch || {});
   const changed = changedSettings(mergeSettings(old?.patch || {}, copySettings(patch)), expected);
   if (!Object.keys(changed).length) {
@@ -139,7 +146,7 @@ function queueSettings(section, patch, delay = 0, run = null) {
     return;
   }
   if (old && equalSettings(old.patch, changed)) {
-    // Blur can flush a real pending edit, but cannot retry a failure or restart feedback.
+    // 失焦时可立即冲刷待发防抖修改，但不自动重试已失败的任务。
     if (!delay && !old.error) {
       if (old.timer) clearTimeout(old.timer);
       old.timer = null; old.ready = true; drainSettings();
@@ -175,14 +182,14 @@ function drainSettings() {
       try {
         const applied = job.run ? await job.run() : await App.UpdateSettings(job.patch);
         settingsConfirmed = mergeSettings(settingsConfirmed, job.patch || applied || {});
-        // Only the committed service response drives the sidebar; never replace live editor data.
+        // 仅用已落盘的服务配置刷新侧栏状态，不回写实时表单内容。
         if (job.section === "service") sidebarServiceConfig = copySettings({mineru: applied.mineru, llm: applied.llm});
         settingsState(job.section, settingsJobs.has(job.section) ? "saving" : "saved");
       } catch (e) {
         const newer = settingsJobs.get(job.section);
         if (newer?.timer) clearTimeout(newer.timer);
         if (newer?.run && !newer.patch) {
-          // A newer import supersedes a failed selection; its resulting font is not known yet.
+          // 新的字体导入动作会覆盖此前失败的字体切换，导入完成后再确定实际字体名。
           job.patch = null; job.run = newer.run;
         } else if (newer) {
           job.patch = mergeSettings(job.patch || {}, newer.patch || {});
@@ -215,7 +222,7 @@ async function flushSettings(retry = false) {
       if (!job.error) job.ready = true;
     }
     await drainSettings();
-    // Drain edits made while the previous write was pending, including their debounce timers.
+    // 冲刷上一次落盘等待期间新增的输入及其防抖定时器。
     if (![...settingsJobs.values()].some(j => !j.error)) break;
     retry = false;
   }
@@ -345,7 +352,7 @@ async function checkConfigRecovery() {
         await settingsRunning;
         await App.RecoverConfig(action);
         await loadSettings(); initSettingsBaseline();
-        // Rebase only uncommitted leaves onto the recovered configuration.
+        // 仅将尚未提交的字段改动合并回已恢复的配置基准上。
         let pending = {};
         for (const job of settingsJobs.values()) pending = mergeSettings(pending, job.patch || {});
         await loadSettings(mergeSettings(CFG, pending));

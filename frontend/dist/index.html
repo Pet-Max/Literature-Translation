@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'">
 <title>Literature Translation</title>
-<link rel="stylesheet" href="./styles.css?v=1.4.2">
+<link rel="stylesheet" href="./styles.css?v=1.4.3">
 <link rel="stylesheet" href="/assets/katex/katex.min.css">
 <link rel="stylesheet" href="/assets/lxgw/lxgwwenkai-regular.css">
 <link rel="stylesheet" href="/assets/lxgw/lxgwwenkai-bold.css">
@@ -108,19 +108,26 @@
         <h3>服务连接</h3>
         <div class="card-hint">MinerU 解析与翻译模型的凭据和参数 · 凭据旁的小图标可测试连通 · <a class="mini-link" id="mineru-link" href="https://mineru.net/apiManage/token">前往 API 管理 ↗</a></div>
         <div class="fgrid">
-          <label>API Token</label><div class="conn-wrap"><input class="in mono" type="password" id="cfg-mineru-token" placeholder="mineru.net「API 管理」页生成"><button class="conn-dot idle" data-conn="mineru" title="测试连接" aria-label="测试 MinerU 连接"><svg class="ecg" viewBox="0 0 20 20" aria-hidden="true"><path d="M1.5 10H5.9L7.5 6.4L10.1 13.9L11.7 10H18.5"/></svg></button></div>
-          <label>解析模式</label><div><select class="in" id="cfg-mineru-mode" style="max-width:260px">
+          <label for="cfg-mineru-token">API Token</label><div class="conn-wrap"><input class="in mono has-eye" type="password" id="cfg-mineru-token" placeholder="mineru.net「API 管理」页生成"><button type="button" class="eye-btn" data-toggle-pw="cfg-mineru-token" title="显示/隐藏 Token" aria-label="显示或隐藏 API Token" aria-pressed="false"></button><button class="conn-dot idle" data-conn="mineru" title="测试连接" aria-label="测试 MinerU 连接"><svg class="ecg" viewBox="0 0 20 20" aria-hidden="true"><path d="M1.5 10H5.9L7.5 6.4L10.1 13.9L11.7 10H18.5"/></svg></button></div>
+          <label for="cfg-mineru-mode">解析模式</label><div><select class="in f-ctrl-md" id="cfg-mineru-mode">
             <option value="vlm">精准解析（VLM，公式表格更准）</option>
             <option value="pipeline">快速解析（pipeline，文本层优先）</option>
           </select></div>
-          <label>模型 API 地址</label><div class="conn-wrap"><input class="in mono" id="cfg-llm-url" placeholder="https://api.deepseek.com"><button class="conn-dot idle" data-conn="llm" title="测试连接" aria-label="测试 LLM 连接"><svg class="ecg" viewBox="0 0 20 20" aria-hidden="true"><path d="M1.5 10H5.9L7.5 6.4L10.1 13.9L11.7 10H18.5"/></svg></button></div>
-          <label>API Key</label><input class="in mono" type="password" id="cfg-llm-key" placeholder="sk-...">
-          <label>模型名</label><div class="inline-btns" style="position:relative">
-            <input class="in mono" id="cfg-llm-model" style="max-width:230px" placeholder="deepseek-flash">
+          <label for="cfg-mineru-lang">解析语言</label><div><select class="in f-ctrl-md" id="cfg-mineru-lang">
+            <option value="">英文（默认）</option>
+            <option value="ch">中文 / 中英混排</option>
+            <option value="chinese_cht">繁体中文</option>
+            <option value="japan">日文</option>
+            <option value="korean">韩文</option>
+          </select></div>
+          <label for="cfg-llm-url">模型 API 地址</label><div class="conn-wrap"><input class="in mono" id="cfg-llm-url" placeholder="https://api.deepseek.com"><button class="conn-dot idle" data-conn="llm" title="测试连接" aria-label="测试 LLM 连接"><svg class="ecg" viewBox="0 0 20 20" aria-hidden="true"><path d="M1.5 10H5.9L7.5 6.4L10.1 13.9L11.7 10H18.5"/></svg></button></div>
+          <label for="cfg-llm-key">API Key</label><div class="pw-wrap"><input class="in mono" type="password" id="cfg-llm-key" placeholder="sk-..."><button type="button" class="eye-btn" data-toggle-pw="cfg-llm-key" title="显示/隐藏 Key" aria-label="显示或隐藏 API Key" aria-pressed="false"></button></div>
+          <label for="cfg-llm-model">模型名</label><div class="inline-btns" style="position:relative">
+            <input class="in mono f-ctrl-md" id="cfg-llm-model" placeholder="deepseek-flash">
             <button class="btn" id="btn-fetch-models" title="从上游接口拉取可用模型列表">拉取模型</button>
             <div class="model-pop" id="model-pop" hidden></div>
           </div>
-          <label>并发段数</label><div><select class="in" id="cfg-llm-conc" style="max-width:150px">
+          <label for="cfg-llm-conc">并发段数</label><div><select class="in f-ctrl-md" id="cfg-llm-conc">
             <option value="1">1（最稳）</option><option value="3">3（推荐）</option>
             <option value="5">5（最快）</option><option value="8">8</option>
           </select></div>
@@ -152,7 +159,7 @@
         <div class="swatches" id="zhbg-swatches"></div>
         <div class="toggle-row">
           <span class="switch"><input type="checkbox" id="cfg-bilingual"><i></i></span>
-          <span class="t-name">双语对照</span><span class="t-desc">每段译文下方附英文原文，方便对照</span>
+          <label for="cfg-bilingual" class="t-name">双语对照</label><span class="t-desc">每段译文下方附英文原文，方便对照</span>
         </div>
         <div class="enbg-row" id="enbg-row" hidden>
           <div class="enbg-line">
@@ -170,23 +177,23 @@
         </div>
         <div class="toggle-row">
           <span class="switch"><input type="checkbox" id="cfg-toc"><i></i></span>
-          <span class="t-name">生成目录</span><span class="t-desc">按解析出的标题层级</span>
+          <label for="cfg-toc" class="t-name">生成目录</label><span class="t-desc">按解析出的标题层级</span>
         </div>
         <div class="toggle-row">
           <span class="switch"><input type="checkbox" id="cfg-twocolumn"><i></i></span>
-          <span class="t-name">双栏排版</span><span class="t-desc">接近期刊观感，公式多时建议关闭</span>
+          <label for="cfg-twocolumn" class="t-name">双栏排版</label><span class="t-desc">接近期刊观感，公式多时建议关闭</span>
         </div>
         <div class="toggle-row">
           <span class="switch"><input type="checkbox" id="cfg-skiprefs"><i></i></span>
-          <span class="t-name">参考文献保留原文</span><span class="t-desc">学界惯例，检索入口不翻译</span>
+          <label for="cfg-skiprefs" class="t-name">参考文献保留原文</label><span class="t-desc">学界惯例，检索入口不翻译</span>
         </div>
         <div class="toggle-row">
           <span class="switch"><input type="checkbox" id="cfg-repair"><i></i></span>
-          <span class="t-name">拼写校准</span><span class="t-desc">用原 PDF 词表修复解析损伤（推荐开）</span>
+          <label for="cfg-repair" class="t-name">拼写校准</label><span class="t-desc">用原 PDF 词表修复解析损伤（推荐开）</span>
         </div>
         <div class="toggle-row">
           <span class="switch"><input type="checkbox" id="cfg-repair-symbols"><i></i></span>
-          <span class="t-name">符号修复</span><span class="t-desc">修复 |00⟩、公式箭头等符号级损伤（推荐开）</span>
+          <label for="cfg-repair-symbols" class="t-name">符号修复</label><span class="t-desc">修复 |00⟩、公式箭头等符号级损伤（推荐开）</span>
         </div>
       </div>
 
@@ -194,11 +201,16 @@
         <h3>输出</h3>
         <div class="card-hint">译文 PDF 的正文字体（下方预览）与归档目录</div>
         <div class="fgrid">
-          <label>正文字体</label><div class="inline-btns">
-            <select class="in" id="cfg-font" style="max-width:240px"></select>
-            <button class="btn" id="font-import">导入字体</button>
+          <label for="cfg-font">正文字体</label><div class="inline-btns">
+            <select class="in f-ctrl-md" id="cfg-font"></select>
+            <button type="button" class="btn" id="font-import">导入字体</button>
+            <button type="button" class="btn danger" id="font-remove" hidden>删除字体</button>
           </div>
-          <label>归档目录</label><input class="in mono" id="cfg-outdir" placeholder="默认 程序目录\Literature Library">
+          <label for="cfg-outdir">归档目录</label><div class="inline-btns">
+            <input class="in mono" id="cfg-outdir" placeholder="默认 程序目录\Literature Library">
+            <button type="button" class="btn" id="btn-outdir-pick">选择目录</button>
+            <button type="button" class="btn" id="btn-outdir-open" title="在资源管理器中打开归档目录">打开</button>
+          </div>
         </div>
         <div id="font-preview-status" class="card-hint" role="status" aria-live="polite"></div>
         <div class="preview-block" id="font-preview">
@@ -251,7 +263,7 @@
   </div>
 </div>
 <script defer src="/assets/katex/katex.min.js"></script>
-<script src="/main.js?v=1.4.2"></script>
-<script src="/autosave.js?v=1.4.2"></script>
+<script src="/main.js?v=1.4.3"></script>
+<script src="/autosave.js?v=1.4.3"></script>
 </body>
 </html>

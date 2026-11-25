@@ -10,8 +10,8 @@ export function ClearLog() {
   return window['go']['app']['App']['ClearLog']();
 }
 
-export function FetchModels() {
-  return window['go']['app']['App']['FetchModels']();
+export function DefaultGlossary() {
+  return window['go']['app']['App']['DefaultGlossary']();
 }
 
 export function FetchModelsWithConfig(arg1, arg2) {
@@ -28,6 +28,10 @@ export function FontAdd(arg1) {
 
 export function FontList() {
   return window['go']['app']['App']['FontList']();
+}
+
+export function FontRemove(arg1) {
+  return window['go']['app']['App']['FontRemove'](arg1);
 }
 
 export function FrontendReady() {
@@ -56,6 +60,10 @@ export function IronRules() {
 
 export function OpenPath(arg1) {
   return window['go']['app']['App']['OpenPath'](arg1);
+}
+
+export function PickDirectory() {
+  return window['go']['app']['App']['PickDirectory']();
 }
 
 export function PickFiles() {
@@ -114,28 +122,16 @@ export function RecoverConfig(arg1) {
   return window['go']['app']['App']['RecoverConfig'](arg1);
 }
 
-export function SaveConfig(arg1) {
-  return window['go']['app']['App']['SaveConfig'](arg1);
-}
-
-export function SaveRules(arg1, arg2) {
-  return window['go']['app']['App']['SaveRules'](arg1, arg2);
+export function ResetGlossaryToDefault() {
+  return window['go']['app']['App']['ResetGlossaryToDefault']();
 }
 
 export function SetFontPreset(arg1, arg2) {
   return window['go']['app']['App']['SetFontPreset'](arg1, arg2);
 }
 
-export function TestLLM() {
-  return window['go']['app']['App']['TestLLM']();
-}
-
 export function TestLLMWithConfig(arg1, arg2) {
   return window['go']['app']['App']['TestLLMWithConfig'](arg1, arg2);
-}
-
-export function TestMinerU() {
-  return window['go']['app']['App']['TestMinerU']();
 }
 
 export function TestMinerUWithConfig(arg1) {

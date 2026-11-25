@@ -7,7 +7,7 @@ export function CheckUpdate():Promise<app.UpdateInfo>;
 
 export function ClearLog():Promise<void>;
 
-export function FetchModels():Promise<Array<string>>;
+export function DefaultGlossary():Promise<Array<config.Term>>;
 
 export function FetchModelsWithConfig(arg1:string,arg2:string):Promise<Array<string>>;
 
@@ -16,6 +16,8 @@ export function FinishSettingsClose():Promise<void>;
 export function FontAdd(arg1:string):Promise<config.UserFont>;
 
 export function FontList():Promise<Array<config.UserFont>>;
+
+export function FontRemove(arg1:string):Promise<config.Config>;
 
 export function FrontendReady():Promise<void>;
 
@@ -30,6 +32,8 @@ export function GetLogTail():Promise<Array<app.LogLine>>;
 export function IronRules():Promise<string>;
 
 export function OpenPath(arg1:string):Promise<void>;
+
+export function PickDirectory():Promise<string>;
 
 export function PickFiles():Promise<Array<string>>;
 
@@ -58,17 +62,11 @@ export function QueueState():Promise<Record<string, any>>;
 
 export function RecoverConfig(arg1:string):Promise<config.Config>;
 
-export function SaveConfig(arg1:config.Config):Promise<void>;
-
-export function SaveRules(arg1:string,arg2:Array<config.RulePreset>):Promise<void>;
+export function ResetGlossaryToDefault():Promise<config.Config>;
 
 export function SetFontPreset(arg1:string,arg2:string):Promise<void>;
 
-export function TestLLM():Promise<number>;
-
 export function TestLLMWithConfig(arg1:string,arg2:string):Promise<app.ConnectionResult>;
-
-export function TestMinerU():Promise<string>;
 
 export function TestMinerUWithConfig(arg1:string):Promise<app.ConnectionResult>;
 

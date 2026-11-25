@@ -181,7 +181,7 @@ func TestCalibrateContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	// "of-diagonal" 不再修复：功能词源词一律不替换（of→off 的放行通道
-	// 同样会产出 of→ofy、and→andv 类垃圾，证据权衡后整体关停），真词
+	// 同样会产出 of→ofy、and→andv 类误改词条，证据权衡后整体关停），真词
 	// 损伤修复保留非功能词形态（over→offer、yields→fields）
 	want := "quasiprobability approaches offer a natural framework. " +
 		"engineered via controlled driving fields. " +

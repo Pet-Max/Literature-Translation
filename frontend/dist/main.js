@@ -15,7 +15,7 @@ const escAttr = (s) => esc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;"); //
 const fileCode = (path) => {
   const base = path.split(/[\\/]/).pop().replace(/\.(md|pdf)$/i, "");
   const m = base.match(/^([A-Za-z]+\d+)/);
-  return m ? m[1] : base.slice(0, 12);
+  return (m ? m[1] : base).slice(0, 6);
 };
 
 // ------------------------------------------------ 视图切换
@@ -111,16 +111,25 @@ function visibleStages(t) {
 function taskCard(t) {
   const code = fileCode(t.source_path);
   const fileName = t.source_path.split(/[\\/]/).pop();
+  const isPaused = t.status === "等待" && /已暂停/.test(t.stage || "");
+  // 区分三种暂停来源：解析暂停 / 翻译暂停（含 0 段起步暂停）/ 排版暂停（复用 pause_stage 或文案前缀）
+  const isPausedParsing = isPaused && /^解析已暂停/.test(t.stage || "");
+  const isPausedRendering = isPaused && (t.pause_stage === "排版中" || /^导出已暂停/.test(t.stage || ""));
+  const isPausedTranslating = isPaused && !isPausedParsing && !isPausedRendering && (t.total > 0 || /^翻译已暂停/.test(t.stage || ""));
+  const isPausedStep = isPausedParsing || isPausedRendering || isPausedTranslating;
   // chip 文案：拼写校准是解析的子步骤（Status 仍是枚举「解析中」），
-  // 徽章按 stage 显示更精确一步
-  const chipText = t.status === "解析中" && t.stage === "拼写校准" ? "拼写校准" : t.status;
-  const chipClass = { "解析中": "run", "拼写校准": "run", "翻译中": "run", "排版中": "run", "完成": "ok", "失败": "bad" }[chipText] || "";
+  // 徽章按 stage 显示更精确一步；暂停态突出显示「已暂停」
+  const chipText = isPaused ? "已暂停" : (t.status === "解析中" && t.stage === "拼写校准" ? "拼写校准" : t.status);
+  const chipClass = isPaused ? "paused" : ({ "解析中": "run", "拼写校准": "run", "翻译中": "run", "排版中": "run", "完成": "ok", "失败": "bad" }[chipText] || "");
 
-  // 步进器：只渲染已到达的阶段，成功一步亮一步
+  // 步进器：只渲染已到达的阶段，成功一步亮一步；暂停态按暂停所处阶段高亮
   // cur 与 visibleStages 同口径用 stage 优先定位（拼写校准期间「解析」标 ✓）
-  const vis = visibleStages(t);
   const idx = stageIdxOf(t);
-  const cur = idx[t.stage] ?? idx[t.status];
+  let pausedStep = 0;
+  if (isPausedRendering) pausedStep = t.kind === "pdf" ? 3 : t.kind === "md" ? 1 : 0;
+  else if (isPausedTranslating) pausedStep = t.kind === "pdf" ? 2 : 0;
+  const vis = isPausedStep ? pausedStep + 1 : visibleStages(t);
+  const cur = isPausedStep ? pausedStep : (idx[t.stage] ?? idx[t.status]);
   const prevVis = lastStageCount[t.id] ?? 1;
   let stages = "";
   for (let i = 0; i < vis; i++) {
@@ -130,6 +139,9 @@ function taskCard(t) {
     else if (t.status === "失败") {
       st = i === vis - 1 ? "fail" : "done";
       dot = st === "fail" ? "✕" : "✓";
+    } else if (isPausedStep) {
+      st = i < pausedStep ? "done" : "paused";
+      dot = i < pausedStep ? "✓" : "⏸";
     } else if (t.status === "等待") { st = ""; } // 未开始：静态灰点，不脉冲
     else if (i < cur) { st = "done"; dot = "✓"; }
     else { st = "cur"; }
@@ -140,19 +152,20 @@ function taskCard(t) {
   lastStageCount[t.id] = vis;
 
   let progressHtml = "";
-  if (t.status === "翻译中" && t.total > 0) {
-    // 分桶渲染（段数无关）：≤60 段一段一格——绿=已完成、红=失败、灰=待翻；
-    // 更多段时聚合为 60 桶，桶内含失败→红、全完成→绿，其余灰。
-    // done_idx/failed_idx 由引擎进度事件携带；旧版引擎没有时退化为比例条。
+  if ((t.status === "翻译中" || isPausedTranslating) && t.total > 0) {
+    // 分桶渲染（段数无关）：≤60 段一段一格——主题色=已完成、橙=已暂停、红=失败、灰=待翻；
+    // 更多段时聚合为 60 桶，桶内含失败→红、全完成→主题色，其余灰。
+    // done_idx/failed_idx 由引擎进度事件携带；缺少索引字段时退化为比例条。
     const CAP = 60;
     const cells = Math.min(t.total, CAP);
     const hasIdx = Array.isArray(t.done_idx) || Array.isArray(t.failed_idx);
     const doneSet = new Set(t.done_idx || []);
     const failSet = new Set(t.failed_idx || []);
+    const fillCls = isPausedTranslating ? "paused" : "f";
     let bars = "";
     if (hasIdx && t.total <= CAP) {
       for (let i = 0; i < t.total; i++) {
-        bars += `<i class="${failSet.has(i) ? "bad" : doneSet.has(i) ? "f" : ""}"></i>`;
+        bars += `<i class="${failSet.has(i) ? "bad" : doneSet.has(i) ? fillCls : ""}"></i>`;
       }
     } else if (hasIdx) {
       const per = t.total / cells;
@@ -164,17 +177,23 @@ function taskCard(t) {
           if (failSet.has(i)) bad = true;
           else if (!doneSet.has(i)) allDone = false;
         }
-        bars += `<i class="${bad ? "bad" : allDone ? "f" : ""}"></i>`;
+        bars += `<i class="${bad ? "bad" : allDone ? fillCls : ""}"></i>`;
       }
     } else {
       const filled = Math.round((t.done / t.total) * cells);
       for (let i = 0; i < cells; i++) {
-        bars += `<i class="${i < filled ? "f" : ""}"></i>`;
+        bars += `<i class="${i < filled ? fillCls : ""}"></i>`;
       }
     }
+    const pct = Math.round((t.done / t.total) * 100);
+    const rightCap = t.failed > 0 || t.sweeping
+      ? `<span class="eta">失败 ${t.failed}${t.sweeping ? " · 补翻中" : ""}</span>`
+      : `<span class="ok-hint">${pct}%${isPausedTranslating ? " · 断点已保存" : ""}</span>`;
     progressHtml = `
-      <div class="segbar" aria-label="翻译进度">${bars}</div>
-      <div class="seg-cap"><span>第 ${t.done} / ${t.total} 段</span><span class="eta">失败 ${t.failed}${t.sweeping ? " · 补翻中" : ""}</span></div>`;
+      <div class="seg-wrap">
+        <div class="segbar" aria-label="翻译进度">${bars}</div>
+        <div class="seg-cap"><span>第 ${t.done} / ${t.total} 段</span>${rightCap}</div>
+      </div>`;
   }
 
   // 状态相关的 meta 文案（信息，不做装饰）；kind 标注实际走的路径
@@ -183,47 +202,52 @@ function taskCard(t) {
     md: "英文 MD · 翻译+排版",
     export: "中文 MD · 仅排版",
   }[t.kind] || "英文 MD · 翻译+排版";
-  let meta;
+  let metaHtml;
+  const splitLabel = t.status === "等待" ? `将自动分 ${t.parts} 片` : `分 ${t.parts} 片解析`;
+  const splitTag = t.pages > 0 && t.parts > 1 && t.status !== "完成"
+    ? `<span class="meta-tag">${t.pages} 页 · ${splitLabel}</span>` : "";
   if (t.status === "完成") {
     const failPart = t.failed > 0 && t.kind !== "export" ? ` · ${t.failed} 段失败保留英文` : "";
-    meta = t.kind === "export" ? "排版完成" : `${t.done} 段译文${failPart}` + (t.refs_kept > 0 ? ` · 参考文献 ${t.refs_kept} 条保留原文` : "");
+    const baseText = t.kind === "export" ? "排版完成" : `${t.done} 段译文${failPart}`;
+    const refTag = t.refs_kept > 0 ? `<span class="meta-tag">参考文献 ${t.refs_kept} 条保留原文</span>` : "";
+    metaHtml = `<span>${esc(baseText)}</span>${refTag}`;
   } else if (t.status === "失败") {
     // 引擎未就绪/建归档失败/语言预检被拒发生在解析之前——别误标"卡在「解析」"。
     // 「已开始」= 流程推进到过任一实际阶段（解析中/拼写校准/翻译中/排版中），
     // 或 MinerU 轮询已上报过状态（解析中（…）形态）。
     const stageKnown = stageIdxOf(t)[t.stage] !== undefined || /^解析中（/.test(t.stage || "");
     const started = t.done > 0 || t.total > 0 || stageKnown;
-    meta = started ? `${kindLabel} · 卡在「${stagesOf(t)[vis - 1]}」这一步`
-                   : `${kindLabel} · 未能开始（详见错误信息）`;
+    const text = started ? `${kindLabel} · 卡在「${stagesOf(t)[vis - 1]}」这一步`
+                         : `${kindLabel} · 未能开始（详见错误信息）`;
+    metaHtml = `<span>${esc(text)}</span>${splitTag}`;
   } else {
-    meta = `${kindLabel} · ${t.stage || t.status}`;
+    metaHtml = `<span>${esc(`${kindLabel} · ${t.stage || t.status}`)}</span>${splitTag}`;
   }
 
   let sideActions = "";
   if (t.status === "完成") {
     sideActions = `
       <div class="btn-rows">
-        <button class="btn primary" data-open="${escAttr(t.out_pdf)}">中文 PDF</button>
-        <button class="btn" data-open="${escAttr(t.work_dir)}">打开文件夹</button>
-        <button class="btn" data-retry="${t.id}">重跑</button>
-        <button class="btn" data-remove="${t.id}" title="从队列移除这张卡片">移除</button>
+        <button class="btn sm primary" data-open="${escAttr(t.out_pdf)}" title="在资源管理器中定位中文 PDF">中文 PDF</button>
+        <button class="btn sm" data-open="${escAttr(t.work_dir)}">打开文件夹</button>
+        <button class="btn sm" data-retry="${t.id}">重跑</button>
+        <button class="btn sm" data-remove="${t.id}" title="从队列移除这张卡片">移除</button>
       </div>`;
   } else if (t.status === "失败") {
     sideActions = `
       <div class="btn-rows">
-        <button class="btn primary" data-retry="${t.id}">重试</button>
-        <button class="btn" data-open="${escAttr(t.work_dir || t.source_path)}">打开文件夹</button>
-        <button class="btn" data-remove="${t.id}" title="从队列移除这张卡片">移除</button>
+        <button class="btn sm primary" data-retry="${t.id}">重试</button>
+        <button class="btn sm" data-open="${escAttr(t.work_dir || t.source_path)}">打开文件夹</button>
+        <button class="btn sm" data-remove="${t.id}" title="从队列移除这张卡片">移除</button>
       </div>`;
   } else if (t.status === "等待") {
     sideActions = `<div class="btn-rows">
-      <button class="btn primary" data-startone="${t.id}" title="只跑这一篇，跑完即暂停">开始</button>
-      <button class="btn" data-remove="${t.id}">取消排队</button>
+      <button class="btn sm primary" data-startone="${t.id}" title="只跑这一篇，跑完即暂停">${isPausedStep ? "继续" : "开始"}</button>
+      <button class="btn sm" data-remove="${t.id}">取消排队</button>
     </div>`;
   } else {
-    // 运行中只保留立即暂停——「重新排队」对运行中任务必然被后端拒绝，
-    // 是只会弹错误弹窗的死按钮；要重排先「立即暂停」再重试
-    sideActions = `<div class="btn-rows"><button class="btn" data-pausenow="${t.id}" title="立即中断当前任务：断点已逐段落盘，点「开始」从断点接续">立即暂停</button></div>`;
+    // 运行中重排会被后端拒绝并弹出错误提示，故仅保留「立即暂停」
+    sideActions = `<div class="btn-rows"><button class="btn sm" data-pausenow="${t.id}" title="立即中断当前任务：断点已逐段落盘，点「开始」从断点接续">立即暂停</button></div>`;
   }
   const failNote = t.status === "失败" && t.err
     ? `<div class="fail-note">${esc(t.err.slice(0, 240))}</div>` : "";
@@ -235,24 +259,29 @@ function taskCard(t) {
     ? `<div class="warn-note">有 ${t.failed} 段经多轮重试仍未通过校验，成品对应位置保留英文原文。点「重跑」补翻：已翻好的段走断点复用，只重翻失败段。</div>` : "";
   const enterCls = cardSeen[t.id] ? "" : " enter";
   cardSeen[t.id] = true;
+  const kindTileLabel = t.kind === "pdf" ? "PDF" : t.kind === "export" ? "中文" : "MD";
   return `
   <div class="task${enterCls}" id="task-${t.id}">
     <div class="codetile${t.kind !== "pdf" ? " md" : ""}" title="${escAttr(t.source_path)}">
       <div class="codetile-code">${esc(code)}</div>
-      <div class="codetile-kind">${t.kind === "pdf" ? "文献原文" : t.kind === "export" ? "中文稿" : "已解析稿"}</div>
+      <div class="codetile-kind">${kindTileLabel}</div>
     </div>
-    <div class="task-body">
-      <div class="task-name" title="${escAttr(t.source_path)}">${esc(fileName)}</div>
-      <div class="task-meta">${esc(meta)}</div>
-      <div class="stepper">${stages}</div>
+    <div class="task-main">
+      <div class="task-top">
+        <div class="task-title-wrap">
+          <div class="task-name" title="${escAttr(t.source_path)}">${esc(fileName)}</div>
+          <div class="task-meta">${metaHtml}</div>
+        </div>
+        <span class="status-chip ${chipClass}">${esc(chipText)}</span>
+      </div>
       ${progressHtml}
       ${failNote}
       ${resumeNote}
       ${sweepNote}
-    </div>
-    <div class="task-side">
-      <span class="status-chip ${chipClass}">${esc(chipText)}</span>
-      ${sideActions}
+      <div class="task-bottom">
+        <div class="stepper">${stages}</div>
+        ${sideActions}
+      </div>
     </div>
   </div>`;
 }
@@ -269,9 +298,12 @@ function renderQueue() {
     QUEUE_STATE = st;
     const list = $("queue-list");
     list.innerHTML = tasks.map(taskCard).join("");
+    $("dropzone").classList.toggle("compact", tasks.length > 0);
     $("queue-count").textContent = tasks.length + " 个任务";
     $("nav-task-count").textContent = String(tasks.filter((t) => t.status !== "完成" && t.status !== "失败").length);
     $("queue-empty").style.display = tasks.length ? "none" : "block";
+    const clearBtn = $("btn-clear-finished");
+    if (clearBtn) clearBtn.disabled = !tasks.some((t) => t.status === "完成" || t.status === "失败");
     // 开始/暂停开关：跑着 → 暂停；停着且有等待任务 → 开始；否则隐藏
     const toggle = $("btn-queue-toggle");
     if (st.running) {
@@ -451,6 +483,18 @@ async function loadSettings(config = null) {
   CFG.glossary = copySettings(CFG.glossary_rows ?? CFG.glossary ?? []);
   $("cfg-mineru-token").value = CFG.mineru?.token || "";
   $("cfg-mineru-mode").value = CFG.mineru?.model_version || "vlm";
+  // 空串与 "en" 在后端任务指纹（configFingerprint）中等价，统一归一为 "" 以保持默认缓存复用
+  const langSel = $("cfg-mineru-lang");
+  const rawLang = (CFG.mineru?.language || "").trim();
+  const langVal = !rawLang || rawLang.toLowerCase() === "en" ? "" : rawLang;
+  langSel.value = langVal;
+  if (langSel.selectedIndex < 0) {
+    const o = document.createElement("option");
+    o.value = langVal;
+    o.textContent = langVal;
+    langSel.appendChild(o);
+    langSel.value = o.value;
+  }
   $("cfg-llm-url").value = CFG.llm?.base_url || "";
   $("cfg-llm-key").value = CFG.llm?.api_key || "";
   $("cfg-llm-model").value = CFG.llm?.model || "";
@@ -888,15 +932,51 @@ function startRuleRename(i) {
 async function loadFontSection() {
   // || []：绑定层万一返回 null（Go nil 切片序列化形态）时不崩，空列表处理
   const list = (await App.FontList()) || [];
- CFG.user_fonts = copySettings(list);
+  CFG.user_fonts = copySettings(list);
   const sel = $("cfg-font");
   sel.innerHTML = Object.entries(FONT_PRESETS)
     .map(([k, p]) => `<option value="${k}">${p.label}</option>`).join("") +
     list.map((uf) => `<option value="${esc(uf.internal_name)}">${esc(uf.display_name)}（导入）</option>`).join("");
   sel.value = CFG.export?.user_font || CFG.export?.font_preset || "lxgw";
   if (sel.selectedIndex < 0) sel.value = "lxgw";
+  const syncRemoveBtn = () => {
+    const rem = $("font-remove");
+    if (rem) rem.hidden = FONT_PRESETS[sel.value] !== undefined || !sel.value;
+  };
+  syncRemoveBtn();
   updatePreview();
   const imp = $("font-import");
+  const rem = $("font-remove");
+  if (rem && !rem.dataset.bound) {
+    rem.dataset.bound = "1";
+    rem.addEventListener("click", async () => {
+      const target = sel.value;
+      if (!target || FONT_PRESETS[target]) return;
+      const uf = (CFG.user_fonts || []).find((u) => u.internal_name === target);
+      const label = uf ? uf.display_name : target;
+      if ((await showModal({
+        icon: "bad",
+        title: `删除字体「${label}」？`,
+        body: "将从本地字体库移除该导入字体，并恢复为默认正文字体。",
+        buttons: [{ label: "取消", kind: "ghost" }, { label: "删除", kind: "danger" }],
+      })) !== 1) return;
+      rem.disabled = imp.disabled = sel.disabled = true;
+      // 不传 patch：确保即使前序选字体操作失败未改变 settingsConfirmed，也不会被 changedSettings 判定为无变更而跳过删除
+      queueSettingsAction("output-font", async () => {
+        try {
+          const next = await App.FontRemove(target);
+          CFG.user_fonts = copySettings(next.user_fonts || []);
+          CFG.export.font_preset = next.export?.font_preset || "lxgw";
+          CFG.export.user_font = next.export?.user_font || "";
+          await loadFontSection();
+          localLog("info", `已删除字体：${label}`);
+          return { export: { font_preset: CFG.export.font_preset, user_font: CFG.export.user_font } };
+        } finally {
+          rem.disabled = imp.disabled = sel.disabled = false;
+        }
+      });
+    });
+  }
   if (imp.dataset.bound) return;
   imp.dataset.bound = "1";
   imp.addEventListener("click", async () => {
@@ -908,31 +988,31 @@ async function loadFontSection() {
       return;
     }
     if (!f) return;
-    // Keep the import action queued until it runs; a font selection must not replace it.
+    // 保持导入任务入队顺序：字体切换不得覆盖尚未执行完成的导入动作
     imp.disabled = sel.disabled = true;
-    try {
-      let uf = null;
-      queueSettingsAction("output-font", async () => {
-        try {
-          if (uf && !((await App.FontList()) || []).some(f => f.internal_name === uf.internal_name && f.file_name === uf.file_name)) uf = null;
-          uf ||= await App.FontAdd(f);
-          await App.SetFontPreset("custom", uf.internal_name);
-          if (!settingsJobs.has("output-font")) { CFG.export.font_preset = "custom"; CFG.export.user_font = uf.internal_name; }
-          await loadFontSection();
-          localLog("info", `已导入字体：${uf.display_name}`);
-          return {export:{font_preset:"custom", user_font:uf.internal_name}};
-        } finally { imp.disabled = sel.disabled = false; }
-      });
-    } catch (e) {
-      imp.disabled = sel.disabled = false;
-      await showModal({ icon: "warn", title: "导入失败", body: esc(String(e)) });
-    }
+    if (rem) rem.disabled = true;
+    let uf = null;
+    queueSettingsAction("output-font", async () => {
+      try {
+        if (uf && !((await App.FontList()) || []).some(f => f.internal_name === uf.internal_name && f.file_name === uf.file_name)) uf = null;
+        uf ||= await App.FontAdd(f);
+        await App.SetFontPreset("custom", uf.internal_name);
+        if (!settingsJobs.has("output-font")) { CFG.export.font_preset = "custom"; CFG.export.user_font = uf.internal_name; }
+        await loadFontSection();
+        localLog("info", `已导入字体：${uf.display_name}`);
+        return {export:{font_preset:"custom", user_font:uf.internal_name}};
+      } finally {
+        imp.disabled = sel.disabled = false;
+        if (rem) rem.disabled = false;
+      }
+    });
   });
   sel.addEventListener("change", async () => {
     const v = sel.value;
     try {
       const preset = FONT_PRESETS[v] ? v : "custom", user = FONT_PRESETS[v] ? "" : v;
       CFG.export.font_preset = preset; CFG.export.user_font = user;
+      syncRemoveBtn();
       updatePreview();
       queueSettingsAction("output-font", () => App.SetFontPreset(preset, user), {export:{font_preset:preset, user_font:user}});
     } catch (e) {
@@ -1094,7 +1174,7 @@ function appendLog(line) {
 
 // 自绘模态框：替代原生 confirm/alert（原生弹窗会显示 wails.localhost 来源）。
 // showModal({icon:'warn'|'bad', title, body, buttons:[{label, kind}]}) → Promise<按钮下标>；
-// Esc = -1、Enter = 首个按钮（下标 0）。样式走主题令牌，深浅自适应。
+// Esc = -1；焦点在弹窗外时 Enter = 首个按钮（下标 0），焦点已在按钮上时触发对应按钮。样式走主题令牌，深浅自适应。
 function showModal(opt) {
   return new Promise((resolve) => {
     const scrim = $("modal-scrim");
@@ -1104,7 +1184,10 @@ function showModal(opt) {
       resolve(-1);
       return;
     }
-    const ico = $("modal-ico"), title = $("modal-title"), body = $("modal-body"), btns = $("modal-btns");
+    const box = $("modal-box"), ico = $("modal-ico"), title = $("modal-title"), body = $("modal-body"), btns = $("modal-btns");
+    const prevFocus = document.activeElement;
+    box.setAttribute("aria-labelledby", "modal-title");
+    box.setAttribute("aria-describedby", "modal-body");
     ico.className = "m-ico " + (opt.icon === "bad" ? "bad" : "warn");
     ico.textContent = opt.icon === "bad" ? "\u2715" : "!";
     title.textContent = opt.title || "";
@@ -1119,14 +1202,27 @@ function showModal(opt) {
     });
     let done = false;
     const onKey = (e) => {
-      if (e.key === "Escape") close(-1);
-      if (e.key === "Enter") close(0);
+      if (e.key === "Escape") { e.preventDefault(); close(-1); return; }
+      if (e.key === "Enter" && !e.target.closest("#modal-btns button")) { e.preventDefault(); close(0); return; }
+      if (e.key === "Tab") {
+        const focusable = [...btns.querySelectorAll("button:not(:disabled)")];
+        if (!focusable.length) return;
+        const idx = focusable.indexOf(document.activeElement);
+        e.preventDefault();
+        const next = e.shiftKey
+          ? focusable[(idx <= 0 ? focusable.length : idx) - 1]
+          : focusable[(idx + 1) % focusable.length];
+        next.focus();
+      }
     };
     function close(v) {
       if (done) return;
       done = true;
       document.removeEventListener("keydown", onKey);
       scrim.hidden = true;
+      if (prevFocus && prevFocus.isConnected && typeof prevFocus.focus === "function") {
+        prevFocus.focus();
+      }
       resolve(v);
     }
     scrim.hidden = false;
@@ -1189,6 +1285,7 @@ function bindCheckUpdate() {
     btn.textContent = "检查中…";
     status.hidden = true;
     out.hidden = true; // 清掉上一轮可能残留的失败提示（失败→成功切换场景）
+    out.classList.remove("bad");
     try {
       const info = await App.CheckUpdate();
       releaseUrl = info.url || "";
@@ -1212,6 +1309,7 @@ function bindCheckUpdate() {
       const sep = raw.indexOf("）: ");
       status.hidden = true;
       out.hidden = false;
+      out.classList.add("bad");
       out.textContent = "检查失败：" + (sep >= 0 ? raw.slice(0, sep + 1) : raw);
       localLog("warn", "检查更新失败：" + raw);
     } finally {
@@ -1319,9 +1417,87 @@ function bindTheme() {
   });
 }
 
+const EYE_SHOW_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.8"/></svg>';
+const EYE_HIDE_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 10.6a2.8 2.8 0 0 0 3.8 3.8"/><path d="M9.9 5.2A10.7 10.7 0 0 1 12 5c6.5 0 10 7 10 7a17.5 17.5 0 0 1-3.2 4.3"/><path d="M6.6 6.6A17.7 17.7 0 0 0 2 12s3.5 7 10 7a10.4 10.4 0 0 0 4.5-1"/></svg>';
+
+// bindPasswordToggles 为凭据输入框绑定明文/掩码切换按钮（不改动输入值与自动保存逻辑）。
+function bindPasswordToggles() {
+  document.querySelectorAll("[data-toggle-pw]").forEach((btn) => {
+    btn.innerHTML = EYE_SHOW_SVG;
+    btn.addEventListener("click", () => {
+      const inp = $(btn.dataset.togglePw);
+      if (!inp) return;
+      const show = inp.type === "password";
+      inp.type = show ? "text" : "password";
+      btn.innerHTML = show ? EYE_HIDE_SVG : EYE_SHOW_SVG;
+      btn.setAttribute("aria-pressed", String(show));
+    });
+  });
+}
+
+// bindOutputDirActions 绑定归档目录的选择与资源管理器打开按钮；输入框留空时回查后端当前默认目录。
+function bindOutputDirActions() {
+  const pick = $("btn-outdir-pick");
+  if (pick) {
+    pick.addEventListener("click", async () => {
+      try {
+        const dir = await App.PickDirectory();
+        if (!dir) return;
+        const inp = $("cfg-outdir");
+        inp.value = dir;
+        inp.dispatchEvent(new Event("input", { bubbles: true }));
+        inp.dispatchEvent(new Event("blur", { bubbles: true }));
+      } catch (e) {
+        localLog("error", "选择目录失败：" + e);
+      }
+    });
+  }
+  const open = $("btn-outdir-open");
+  if (open) {
+    open.addEventListener("click", async () => {
+      let dir = ($("cfg-outdir").value || CFG.export?.output_dir || "").trim();
+      if (!dir) {
+        try { dir = ((await App.GetConfig())?.export?.output_dir || "").trim(); } catch {}
+      }
+      if (!dir) {
+        await showModal({ icon: "warn", title: "暂无可打开的目录", body: "请先通过「选择目录」指定归档位置。" });
+        return;
+      }
+      try {
+        await App.OpenPath(dir);
+      } catch (e) {
+        await showModal({
+          icon: "warn",
+          title: "目录尚未创建或无法打开",
+          body: `路径 <code>${esc(dir)}</code> 当前不存在或不可访问（默认归档目录会在首次处理文献时自动建立）。`,
+        });
+      }
+    });
+  }
+}
+
+// bindSidebarStatusClick 在配置未完成或保存失败时，支持点击侧栏状态跳转至设置页顶部。
+function bindSidebarStatusClick() {
+  const sb = $("sidebar-status");
+  if (!sb) return;
+  const openSettings = () => {
+    if (!sb.classList.contains("needs-setup")) return;
+    document.querySelector('.nav-item[data-view="settings"]')?.click();
+    const main = document.querySelector(".main");
+    if (main) main.scrollTop = 0;
+  };
+  sb.addEventListener("click", openSettings);
+  sb.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSettings(); }
+  });
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   try {
     bindTheme();
+    bindPasswordToggles();
+    bindOutputDirActions();
+    bindSidebarStatusClick();
     bindFetchModels();
     bindConnTests();
     bindCheckUpdate();
